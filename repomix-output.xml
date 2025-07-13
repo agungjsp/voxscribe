@@ -1,0 +1,885 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  index.tsx
+  storage.ts
+  transcribe.ts
+.eslintrc.json
+.gitignore
+.prettierrc
+CHANGELOG.md
+package.json
+README.md
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/index.tsx">
+import {
+  Action,
+  ActionPanel,
+  Alert,
+  confirmAlert,
+  Detail,
+  Form,
+  Icon,
+  List,
+  showToast,
+  Toast,
+  useNavigation,
+} from "@raycast/api";
+import path from "path";
+import { useEffect, useState } from "react";
+
+import {
+  getTranscriptionHistory,
+  removeTranscriptionItem,
+  saveTranscription,
+  TranscriptionHistoryItem,
+} from "./storage";
+import { transcribeAudio } from "./transcribe";
+
+export default function Command() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [history, setHistory] = useState<TranscriptionHistoryItem[]>([]);
+  const { push } = useNavigation();
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  async function loadHistory() {
+    const loadedHistory = await getTranscriptionHistory();
+    setHistory(loadedHistory);
+  }
+
+  async function handleSubmit(values: { audioFile: string[] }) {
+    if (values.audioFile.length === 0) {
+      await showToast({ style: Toast.Style.Failure, title: "No file selected" });
+      return;
+    }
+
+    setIsLoading(true);
+    const abortController = new AbortController();
+
+    try {
+      const toast = await showToast({
+        style: Toast.Style.Animated,
+        title: "Transcription in progress...",
+        primaryAction: {
+          title: "Cancel",
+          onAction: () => {
+            abortController.abort();
+            toast.hide();
+            showToast({ style: Toast.Style.Failure, title: "Transcription cancelled" });
+          },
+        },
+      });
+
+      const filePath = values.audioFile[0];
+      const fileName = path.basename(filePath);
+      const existingTranscription = history.find((item) => path.basename(item.filePath) === fileName);
+
+      if (existingTranscription) {
+        const shouldReTranscribe = await confirmAlert({
+          title: "File already transcribed",
+          message: "A file with the same name has already been transcribed. Do you want to re-transcribe it?",
+          primaryAction: {
+            title: "Re-transcribe",
+            style: Alert.ActionStyle.Default,
+          },
+          dismissAction: {
+            title: "Use existing",
+            style: Alert.ActionStyle.Cancel,
+          },
+        });
+
+        if (!shouldReTranscribe) {
+          push(
+            <TranscriptionResult
+              transcription={existingTranscription.transcription}
+              rawData={existingTranscription.rawData}
+              chunkedFileInfo={existingTranscription.compressedFileInfo}
+            />,
+          );
+          await showToast({ style: Toast.Style.Success, title: "Loaded existing transcription" });
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      const { transcription, rawData, chunkedFileInfo } = await transcribeAudio(filePath, abortController.signal);
+      await saveTranscription({
+        filePath,
+        transcription,
+        rawData,
+        compressedFileInfo: chunkedFileInfo,
+        timestamp: Date.now(),
+      });
+      await loadHistory();
+      push(<TranscriptionResult transcription={transcription} rawData={rawData} chunkedFileInfo={chunkedFileInfo} />);
+      await showToast({ style: Toast.Style.Success, title: "Transcription complete" });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
+      if (error instanceof Error && error.message.includes("FFmpeg not found")) {
+        const markdown = `
+# FFmpeg Not Found
+
+It seems that FFmpeg is not installed or not available in your system's PATH. 
+VoxScribe requires FFmpeg to process audio files.
+
+---
+
+### Installation Guide
+
+You can install FFmpeg using [Homebrew](https://brew.sh) (recommended for macOS):
+
+\`\`\`bash
+brew install ffmpeg
+\`\`\`
+
+If you have installed FFmpeg but are still seeing this error, please ensure that its location is included in your system's \`$PATH\` environment variable.
+        `;
+        push(<Detail markdown={markdown} />);
+      } else {
+        await showToast({ style: Toast.Style.Failure, title: "Transcription failed", message: String(error) });
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleRemoveItem(item: TranscriptionHistoryItem) {
+    try {
+      await removeTranscriptionItem(item);
+      await loadHistory();
+      await showToast({ style: Toast.Style.Success, title: "Item removed from history" });
+    } catch (error) {
+      await showToast({ style: Toast.Style.Failure, title: "Failed to remove item", message: String(error) });
+    }
+  }
+
+  return (
+    <List isLoading={isLoading}>
+      <List.Item
+        title="Transcribe New Audio"
+        actions={
+          <ActionPanel>
+            <Action.Push
+              title="Transcribe New Audio"
+              target={
+                <Form
+                  actions={
+                    <ActionPanel>
+                      <Action.SubmitForm title="Transcribe" onSubmit={handleSubmit} />
+                    </ActionPanel>
+                  }
+                >
+                  <Form.FilePicker id="audioFile" title="Audio File" allowMultipleSelection={false} />
+                </Form>
+              }
+            />
+          </ActionPanel>
+        }
+      />
+      <List.Section title="Transcription History">
+        {history.map((item, index) => (
+          <List.Item
+            key={index}
+            title={path.basename(item.filePath)}
+            subtitle={new Date(item.timestamp).toLocaleString()}
+            actions={
+              <ActionPanel>
+                <Action.Push
+                  title="View Transcription"
+                  target={
+                    <TranscriptionResult
+                      transcription={item.transcription}
+                      rawData={item.rawData}
+                      chunkedFileInfo={item.compressedFileInfo}
+                    />
+                  }
+                />
+                <Action
+                  title="Remove from History"
+                  onAction={() => handleRemoveItem(item)}
+                  shortcut={{ modifiers: ["cmd"], key: "backspace" }}
+                />
+              </ActionPanel>
+            }
+          />
+        ))}
+      </List.Section>
+    </List>
+  );
+}
+
+interface TranscriptionResultProps {
+  transcription: string;
+  rawData: string;
+  chunkedFileInfo: {
+    size: number;
+    extension: string;
+  };
+}
+
+function TranscriptionResult({ transcription, rawData, chunkedFileInfo }: TranscriptionResultProps) {
+  let displayTranscription = transcription;
+  try {
+    const raw = JSON.parse(rawData);
+    if (raw[0] && raw[0].results.channels[0].alternatives[0].words) {
+      displayTranscription = raw
+        .map((r: any) =>
+          r.results.channels[0].alternatives[0].words
+            .map((word: any) => `[Speaker ${word.speaker}] ${word.word}`)
+            .join(" "),
+        )
+        .join("\n\n");
+    }
+  } catch (e) {
+    // It's not a diarized JSON, so we just display the plain text.
+  }
+  let extractedData = {
+    detectedLanguage: "N/A",
+    languageConfidence: "N/A",
+    topics: null,
+    modelName: "N/A",
+    modelVersion: "N/A",
+    modelArch: "N/A",
+  };
+
+  try {
+    const parsedArray = JSON.parse(rawData);
+
+    if (Array.isArray(parsedArray) && parsedArray.length > 0) {
+      const firstResult = parsedArray[0];
+
+      const channel = firstResult?.results?.channels?.[0];
+      const metadata = firstResult?.metadata;
+      const modelInfo = metadata?.model_info;
+      const modelKey = metadata?.models?.[0];
+
+      extractedData = {
+        detectedLanguage: channel?.detected_language ?? "N/A",
+        languageConfidence: String(channel?.language_confidence ?? "N/A"),
+        topics: channel?.topics ?? null,
+        modelName: (modelKey && modelInfo?.[modelKey]?.name) ?? "N/A",
+        modelVersion: (modelKey && modelInfo?.[modelKey]?.version) ?? "N/A",
+        modelArch: (modelKey && modelInfo?.[modelKey]?.arch) ?? "N/A",
+      };
+    } else {
+      console.warn("Raw data is not an array or is empty. Cannot extract metadata.");
+    }
+  } catch (error) {
+    console.error("Failed to parse or process rawData for metadata:", error);
+  }
+
+  const markdown = `
+## Transcription
+
+${displayTranscription}
+  `;
+
+  return (
+    <Detail
+      markdown={markdown}
+      actions={
+        <ActionPanel>
+          <Action.CopyToClipboard title="Copy Transcription" content={displayTranscription} icon={Icon.Clipboard} />
+          <Action.CopyToClipboard
+            title="Copy Raw Data (json)"
+            content={rawData}
+            icon={Icon.Code}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+          />
+        </ActionPanel>
+      }
+      metadata={
+        <Detail.Metadata>
+          <Detail.Metadata.Label title="Detected Language" text={extractedData.detectedLanguage} />
+          <Detail.Metadata.Label title="Language Confidence" text={String(extractedData.languageConfidence)} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label title="Model Name" text={extractedData.modelName} />
+          <Detail.Metadata.Label title="Model Version" text={extractedData.modelVersion} />
+          <Detail.Metadata.Label title="Model Architecture" text={extractedData.modelArch} />
+          <Detail.Metadata.Separator />
+          <Detail.Metadata.Label
+            title="Audio File Size (Compressed)"
+            text={`${(chunkedFileInfo.size / 1024).toFixed(2)} KB`}
+          />
+          <Detail.Metadata.Label title="Audio Format" text={chunkedFileInfo.extension} />
+        </Detail.Metadata>
+      }
+    />
+  );
+}
+</file>
+
+<file path="src/storage.ts">
+import { LocalStorage } from "@raycast/api";
+
+export interface TranscriptionHistoryItem {
+  filePath: string;
+  transcription: string;
+  rawData: string;
+  compressedFileInfo: {
+    size: number;
+    extension: string;
+  };
+  timestamp: number;
+}
+
+const HISTORY_KEY = "transcription_history";
+
+export async function saveTranscription(item: TranscriptionHistoryItem): Promise<void> {
+  const history = await getTranscriptionHistory();
+  history.unshift(item);
+  await LocalStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10))); // Keep only the last 10 items
+}
+
+export async function getTranscriptionHistory(): Promise<TranscriptionHistoryItem[]> {
+  const historyString = await LocalStorage.getItem<string>(HISTORY_KEY);
+  return historyString ? JSON.parse(historyString) : [];
+}
+
+export async function clearTranscriptionHistory(): Promise<void> {
+  await LocalStorage.removeItem(HISTORY_KEY);
+}
+
+export async function removeTranscriptionItem(item: TranscriptionHistoryItem): Promise<void> {
+  const history = await getTranscriptionHistory();
+  const updatedHistory = history.filter(
+    (historyItem) => historyItem.filePath !== item.filePath || historyItem.timestamp !== item.timestamp
+  );
+  await LocalStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+}
+</file>
+
+<file path="src/transcribe.ts">
+import { createClient } from "@deepgram/sdk";
+import { getPreferenceValues, showToast, Toast } from "@raycast/api";
+import axios from "axios";
+import { exec } from "child_process";
+import fs from "fs";
+import path from "path";
+import { promisify } from "util";
+import { tmpdir } from "os";
+
+const execPromise = promisify(exec);
+
+async function getFfmpegPath(): Promise<string> {
+  try {
+    // Check if ffmpeg is in the PATH and executable
+    await execPromise("ffmpeg -version");
+    return "ffmpeg";
+  } catch (error) {
+    // If not in PATH, check common Homebrew paths
+    const commonPaths = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
+    for (const path of commonPaths) {
+      try {
+        await execPromise(`${path} -version`);
+        return path;
+      } catch (e) {
+        // Continue to the next path
+      }
+    }
+  }
+  // If ffmpeg is not found anywhere, throw an error
+  throw new Error("FFmpeg not found. Please install FFmpeg and ensure it is in your system's PATH.");
+}
+
+const CHUNK_DURATION_SECONDS = 300;
+const CHUNK_FORMAT = "wav";
+
+interface Preferences {
+  deepgramApiKey: string;
+  deepgramModel: string;
+  smartFormat: boolean;
+  detectLanguage: boolean;
+  diarize: boolean;
+}
+
+interface TranscriptionResult {
+  transcription: string;
+  rawData: string;
+  chunkedFileInfo: {
+    size: number;
+    extension: string;
+  };
+}
+
+class AbortError extends Error {
+  constructor(message = "The operation was aborted.") {
+    super(message);
+    this.name = "AbortError";
+  }
+}
+
+export async function validateApiKey(apiKey: string): Promise<boolean> {
+  try {
+    const response = await axios.get("https://api.deepgram.com/v1/auth/token", {
+      headers: {
+        Authorization: `Token ${apiKey}`,
+      },
+    });
+
+    return response.status === 200;
+  } catch (error) {
+    console.error("Error validating API key:", error);
+    return false;
+  }
+}
+
+export async function transcribeAudio(filePath: string, signal: AbortSignal): Promise<TranscriptionResult> {
+  if (signal.aborted) throw new AbortError();
+  const preferences = getPreferenceValues<Preferences>();
+  const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
+
+  if (!isValidApiKey) {
+    throw new Error("Invalid API key");
+  }
+
+  const ffmpegPath = await getFfmpegPath();
+  const deepgram = createClient(preferences.deepgramApiKey);
+  const tempDir = await fs.promises.mkdtemp(path.join(tmpdir(), "voxscribe-chunks-"));
+
+  try {
+    const outputPattern = path.join(tempDir, `chunk_%03d.${CHUNK_FORMAT}`);
+    let overallSize = 0;
+
+    console.log(`Creating temporary directory for chunks: ${tempDir}`);
+    showToast({ style: Toast.Style.Animated, title: "Preparing audio..." });
+
+    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${CHUNK_DURATION_SECONDS} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
+    console.log(`Executing FFmpeg segment command: ${segmentCommand}`);
+
+    try {
+      await execPromise(segmentCommand, { signal });
+      console.log("Audio chunking and re-encoding complete.");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        console.log("FFmpeg chunking was aborted.");
+        throw error;
+      }
+      console.error("Error during FFmpeg chunking:", error);
+      throw new Error(`FFmpeg chunking failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (signal.aborted) throw new AbortError();
+
+    const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
+    console.log(`Found ${chunkFiles.length} chunks to transcribe.`);
+
+    if (chunkFiles.length === 0) {
+      throw new Error("No audio chunks were generated. Check the input file and FFmpeg setup.");
+    }
+
+    let combinedTranscription = "";
+    const rawResults = [];
+    const transcriptionTasks = [];
+    let processedCount = 0;
+
+    showToast({
+      style: Toast.Style.Animated,
+      title: "Transcribing audio",
+      message: `Processing ${chunkFiles.length} chunk(s)...`,
+    });
+
+    for (let i = 0; i < chunkFiles.length; i++) {
+      if (signal.aborted) throw new AbortError();
+      const chunkFileName = chunkFiles[i];
+      const chunkFilePath = path.join(tempDir, chunkFileName);
+
+      const task = async () => {
+        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}: ${chunkFileName}`);
+        try {
+          const audioBuffer = await fs.promises.readFile(chunkFilePath);
+          overallSize += audioBuffer.length;
+          const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
+            model: preferences.deepgramModel,
+            detect_language: preferences.detectLanguage,
+            smart_format: preferences.smartFormat,
+            diarize: preferences.diarize,
+          });
+
+          processedCount++;
+          await showToast({
+            style: Toast.Style.Animated,
+            title: "Transcribing audio",
+            message: `Processed ${processedCount} of ${chunkFiles.length} chunks`,
+          });
+
+          if (error) {
+            console.error(`Error transcribing chunk ${chunkFileName}:`, error);
+            return { index: i, transcription: `[Transcription Error for chunk ${i + 1}]`, rawData: null };
+          }
+          if (result?.results?.channels?.[0]?.alternatives?.[0]?.transcript) {
+            let transcription = result.results.channels[0].alternatives[0].transcript;
+            if (preferences.diarize && result.results.channels[0].alternatives[0].words) {
+              transcription = result.results.channels[0].alternatives[0].words
+                .map((word: any) => `[Speaker ${word.speaker}] ${word.word}`)
+                .join(" ");
+            }
+            return {
+              index: i,
+              transcription: transcription,
+              rawData: result,
+            };
+          } else {
+            console.warn(`No transcript returned for chunk ${chunkFileName}`);
+            return { index: i, transcription: `[No transcription for chunk ${i + 1}]`, rawData: null };
+          }
+        } catch (chunkError) {
+          console.error(`Failed to process or transcribe chunk ${chunkFileName}:`, chunkError);
+          return { index: i, transcription: `[Processing Error for chunk ${i + 1}]`, rawData: null };
+        }
+      };
+      transcriptionTasks.push(task());
+    }
+
+    const abortPromise = new Promise((_, reject) => {
+      signal.addEventListener("abort", () => {
+        reject(new AbortError());
+      });
+    });
+
+    const results = (await Promise.race([Promise.all(transcriptionTasks), abortPromise])) as {
+      index: number;
+      transcription: string;
+      rawData: unknown;
+    }[];
+
+    results.sort((a, b) => a.index - b.index);
+
+    for (const result of results) {
+      combinedTranscription += result.transcription + " ";
+      if (result.rawData) {
+        rawResults.push(result.rawData);
+      }
+    }
+
+    await showToast({ style: Toast.Style.Success, title: "Transcription complete!" });
+
+    return {
+      transcription: combinedTranscription.trim(),
+      rawData: JSON.stringify(rawResults),
+      chunkedFileInfo: {
+        size: overallSize,
+        extension: CHUNK_FORMAT,
+      },
+    };
+  } finally {
+    console.log(`Attempting to remove temporary directory: ${tempDir}`);
+    await fs.promises
+      .rm(tempDir, { recursive: true, force: true })
+      .catch((e) => console.error(`Failed to delete temp directory ${tempDir}:`, e));
+    console.log("Temporary directory removed.");
+  }
+}
+</file>
+
+<file path=".eslintrc.json">
+{
+  "root": true,
+  "extends": ["@raycast"]
+}
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+
+# Raycast specific files
+raycast-env.d.ts
+.raycast-swift-build
+.swiftpm
+compiled_raycast_swift
+
+# misc
+.DS_Store
+</file>
+
+<file path=".prettierrc">
+{
+  "printWidth": 120,
+  "singleQuote": false
+}
+</file>
+
+<file path="CHANGELOG.md">
+# VoxScribe Changelog
+
+## [v1.1.0] - 2024-07-30
+
+- Added speaker diarization feature to identify and label different speakers in the audio.
+
+## [Initial Version] - 2024-07-29
+</file>
+
+<file path="package.json">
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "voxscribe",
+  "title": "VoxScribe",
+  "description": "VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. This tool bridges the gap between audio and text, allowing users to quickly convert voice recordings, podcasts, or live speech into editable text format.",
+  "icon": "extension-icon.png",
+  "author": "agung_jayasukma_prasetiyo",
+  "categories": [
+    "Media",
+    "Productivity"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "index",
+      "title": "Transcribe",
+      "description": "Transcribe Audio to Text Instantly",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "deepgramApiKey",
+      "title": "Deepgram API Key",
+      "description": "Your Deepgram API key",
+      "type": "password",
+      "required": true
+    },
+    {
+      "name": "deepgramModel",
+      "title": "Deepgram Model",
+      "description": "The transcription model to use",
+      "type": "dropdown",
+      "required": false,
+      "default": "nova-2",
+      "data": [
+        {
+          "title": "Nova 2 (Latest and Greatest)",
+          "value": "nova-2"
+        },
+        {
+          "title": "Nova 2 General",
+          "value": "nova-2-general"
+        },
+        {
+          "title": "Nova 2 Meeting",
+          "value": "nova-2-meeting"
+        },
+        {
+          "title": "Nova 2 Phone Call",
+          "value": "nova-2-phonecall"
+        },
+        {
+          "title": "Nova 2 Voicemail",
+          "value": "nova-2-voicemail"
+        },
+        {
+          "title": "Nova 2 Finance",
+          "value": "nova-2-finance"
+        },
+        {
+          "title": "Nova 2-Medical",
+          "value": "nova-2-medical"
+        },
+        {
+          "title": "Whisper Large",
+          "value": "whisper-large"
+        }
+      ]
+    },
+    {
+      "name": "smartFormat",
+      "title": "Smart Formatting",
+      "description": "Enable smart formatting for punctuation, etc.",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "detectLanguage",
+      "title": "Detect Language",
+      "description": "Automatically detect the language of the audio",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "diarize",
+      "title": "Speaker Diarization",
+      "description": "Identify and label different speakers in the audio",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": false
+    }
+  ],
+  "dependencies": {
+    "@deepgram/sdk": "^3.6.0",
+    "@raycast/api": "^1.82.3",
+    "@raycast/utils": "^1.16.3",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build --skip-types -e dist -o dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
+</file>
+
+<file path="README.md">
+# VoxScribe
+
+VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. This tool bridges the gap between audio and text, allowing users to quickly convert voice recordings, podcasts, or live speech into editable text format.
+
+## Features
+
+- Transcribe audio files to text using Deepgram's advanced AI models
+- Automatic language detection
+- Smart formatting of transcriptions
+- Audio compression for efficient processing
+- Transcription history management
+- Detailed metadata display for each transcription
+- Speaker diarization to identify and label different speakers
+
+## Installation
+
+1. Ensure you have [Raycast](https://www.raycast.com/) installed on your macOS system.
+2. Install the VoxScribe extension from the Raycast store.
+
+## Configuration
+
+Before using VoxScribe, you need to set up your Deepgram API key and FFmpeg:
+
+### Deepgram API Key
+
+1. Sign up for a Deepgram account and obtain an API key.
+2. Open Raycast and go to the VoxScribe extension settings.
+3. Enter your Deepgram API key in the "Deepgram API Key" field.
+
+### FFmpeg (Windows)
+
+1. Download and install FFmpeg from [FFmpeg's official website](https://ffmpeg.org/download.html).
+2. Ensure the FFmpeg executable is accessible in your system's PATH.
+
+### FFmpeg (macOS)
+
+1. Install FFmpeg using Homebrew:
+   ```sh
+   brew install ffmpeg
+   ```
+2. Ensure the FFmpeg executable is accessible in your system's PATH.
+
+## Usage
+
+1. Open Raycast and search for "VoxScribe" or "Transcribe".
+2. Select "Transcribe New Audio" from the list.
+3. Choose an audio file when prompted.
+4. Wait for the transcription process to complete.
+5. View the transcription result, including the text and metadata.
+
+## Transcription History
+
+VoxScribe keeps a history of your recent transcriptions:
+
+- Access previous transcriptions from the main VoxScribe interface.
+- View, copy, or remove historical transcriptions as needed.
+
+## Contributing
+
+Contributions to VoxScribe are welcome! Please follow these steps:
+
+1. Fork the repository.
+2. Create a new branch for your feature or bug fix.
+3. Make your changes and commit them with clear, descriptive messages.
+4. Push your changes to your fork.
+5. Submit a pull request to the main repository.
+
+## License
+
+VoxScribe is released under the MIT License. See the LICENSE file for details.
+
+## Support
+
+If you encounter any issues or have questions, please file an issue on the GitHub repository or contact the maintainer through Raycast's support channels.
+</file>
+
+<file path="tsconfig.json">
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "include": ["src/**/*", "raycast-env.d.ts"],
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "module": "commonjs",
+    "target": "ES2022",
+    "strict": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "react-jsx",
+    "resolveJsonModule": true
+  }
+}
+</file>
+
+</files>

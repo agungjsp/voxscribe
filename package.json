@@ -1,0 +1,122 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "voxscribe",
+  "title": "VoxScribe",
+  "description": "VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. This tool bridges the gap between audio and text, allowing users to quickly convert voice recordings, podcasts, or live speech into editable text format.",
+  "icon": "extension-icon.png",
+  "author": "agung_jayasukma_prasetiyo",
+  "categories": [
+    "Media",
+    "Productivity"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "index",
+      "title": "Transcribe",
+      "description": "Transcribe Audio to Text Instantly",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "deepgramApiKey",
+      "title": "Deepgram API Key",
+      "description": "Your Deepgram API key",
+      "type": "password",
+      "required": true
+    },
+    {
+      "name": "deepgramModel",
+      "title": "Deepgram Model",
+      "description": "The transcription model to use",
+      "type": "dropdown",
+      "required": false,
+      "default": "nova-2",
+      "data": [
+        {
+          "title": "Nova 2 (Latest and Greatest)",
+          "value": "nova-2"
+        },
+        {
+          "title": "Nova 2 General",
+          "value": "nova-2-general"
+        },
+        {
+          "title": "Nova 2 Meeting",
+          "value": "nova-2-meeting"
+        },
+        {
+          "title": "Nova 2 Phone Call",
+          "value": "nova-2-phonecall"
+        },
+        {
+          "title": "Nova 2 Voicemail",
+          "value": "nova-2-voicemail"
+        },
+        {
+          "title": "Nova 2 Finance",
+          "value": "nova-2-finance"
+        },
+        {
+          "title": "Nova 2-Medical",
+          "value": "nova-2-medical"
+        },
+        {
+          "title": "Whisper Large",
+          "value": "whisper-large"
+        }
+      ]
+    },
+    {
+      "name": "smartFormat",
+      "title": "Smart Formatting",
+      "description": "Enable smart formatting for punctuation, etc.",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "detectLanguage",
+      "title": "Detect Language",
+      "description": "Automatically detect the language of the audio",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "diarize",
+      "title": "Speaker Diarization",
+      "description": "Identify and label different speakers in the audio",
+      "type": "checkbox",
+      "label": "Enabled",
+      "required": false,
+      "default": false
+    }
+  ],
+  "dependencies": {
+    "@deepgram/sdk": "^3.6.0",
+    "@raycast/api": "^1.82.3",
+    "@raycast/utils": "^1.16.3",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.8",
+    "@types/node": "20.8.10",
+    "@types/react": "18.3.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build --skip-types -e dist -o dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
