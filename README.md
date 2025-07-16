@@ -1,69 +1,63 @@
 # VoxScribe
 
-VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. This tool bridges the gap between audio and text, allowing users to quickly convert voice recordings, podcasts, or live speech into editable text format.
+VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. It bridges the gap between audio and text, allowing you to quickly convert voice recordings, podcasts, or live speech into editable transcripts.
 
 ## Features
 
-- Transcribe audio files to text using Deepgram's advanced AI models
-- Automatic language detection
-- Smart formatting of transcriptions
-- Audio compression for efficient processing
-- Transcription history management
-- Detailed metadata display for each transcription
-- Speaker diarization to identify and label different speakers
+- Transcribe audio files to text using Deepgram's advanced AI models.
+- Automatic language detection for multilingual support.
+- Smart formatting for polished, readable transcripts.
+- Audio chunking and compression for efficient processing of large files.
+- Transcription history management with easy access and removal.
+- Detailed metadata display (e.g., detected language, model info, file size).
 
 ## Installation
 
-1. Ensure you have [Raycast](https://www.raycast.com/) installed on your macOS system.
-2. Install the VoxScribe extension from the Raycast store.
+1. Ensure you have [Raycast](https://www.raycast.com/) installed on macOS.
+2. Install the VoxScribe extension from the Raycast Store.
 
 ## Configuration
 
-Before using VoxScribe, you need to set up your Deepgram API key and FFmpeg:
+Before using VoxScribe, set up your Deepgram API key and FFmpeg.
 
 ### Deepgram API Key
 
-1. Sign up for a Deepgram account and obtain an API key.
-2. Open Raycast and go to the VoxScribe extension settings.
-3. Enter your Deepgram API key in the "Deepgram API Key" field.
+1. Sign up for a [Deepgram account](https://deepgram.com/) and obtain an API key.
+2. In Raycast, go to VoxScribe extension settings.
+3. Enter your API key in the "Deepgram API Key" field.
 
-### FFmpeg (Windows)
+### FFmpeg
 
-1. Download and install FFmpeg from [FFmpeg's official website](https://ffmpeg.org/download.html).
-2. Ensure the FFmpeg executable is accessible in your system's PATH.
+- **macOS:** Install via Homebrew:
+  ```
+  brew install ffmpeg
+  ```
+- **Windows:** Download from [FFmpeg's official website](https://ffmpeg.org/download.html) and add to your PATH.
 
-### FFmpeg (macOS)
-
-1. Install FFmpeg using Homebrew:
-   ```sh
-   brew install ffmpeg
-   ```
-2. Ensure the FFmpeg executable is accessible in your system's PATH.
+Ensure FFmpeg is in your system's PATH for audio processing.
 
 ## Usage
 
-1. Open Raycast and search for "VoxScribe" or "Transcribe".
-2. Select "Transcribe New Audio" from the list.
-3. Choose an audio file when prompted.
-4. Wait for the transcription process to complete.
-5. View the transcription result, including the text and metadata.
+1. Open Raycast and search for "Transcribe" or "Live Transcribe".
+2. For file transcription: Select "Transcribe New Audio", choose a file, and wait for results.
+3. For live transcription: Select "Live Transcribe", start speaking, and stop when done.
+4. View results with transcription text, metadata, and copy/export options.
 
 ## Transcription History
 
-VoxScribe keeps a history of your recent transcriptions:
+Access and manage recent transcriptions from the main interface:
 
-- Access previous transcriptions from the main VoxScribe interface.
-- View, copy, or remove historical transcriptions as needed.
+- View, copy, or remove entries.
+- History is limited to the last 10 items for efficiency.
 
 ## Contributing
 
-Contributions to VoxScribe are welcome! Please follow these steps:
+Contributions are welcome! Follow these steps:
 
 1. Fork the repository.
-2. Create a new branch for your feature or bug fix.
-3. Make your changes and commit them with clear, descriptive messages.
-4. Push your changes to your fork.
-5. Submit a pull request to the main repository.
+2. Create a feature/bugfix branch.
+3. Commit changes with clear messages.
+4. Push to your fork and submit a pull request.
 
 ## License
 
@@ -71,4 +65,20 @@ VoxScribe is released under the MIT License. See the LICENSE file for details.
 
 ## Support
 
-If you encounter any issues or have questions, please file an issue on the GitHub repository or contact the maintainer through Raycast's support channels.
+Encounter issues? File a GitHub issue or contact via Raycast support channels.
+
+## Roadmap
+
+Here are planned features to enhance VoxScribe. Priorities are based on user impact and implementation complexity. Contributions welcome!
+
+- **High Priority:**
+  - Real-Time Live Transcription: Stream audio from your microphone for instant transcription during meetings or notes. (Implemented in v2.0 prototype!)
+  - Batch Processing for Multiple Files: Transcribe entire folders or queues of audio files at once.
+
+- **Medium Priority:**
+  - Advanced Export and Sharing Options: Support PDF/Markdown exports and integrations with apps like Notion or Evernote.
+  - Search and Filtering in History: Add search bars, date/language filters, and sorting for easier navigation.
+
+- **Low Priority:**
+  - More Robust Error Handling and User Guidance: Include retries, progress percentages, and tips for optimal audio quality.
+  - Customization and Advanced AI Features: Add custom vocabulary, sentiment analysis, and integrations like AI summaries.

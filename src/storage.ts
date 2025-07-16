@@ -31,7 +31,7 @@ export async function clearTranscriptionHistory(): Promise<void> {
 export async function removeTranscriptionItem(item: TranscriptionHistoryItem): Promise<void> {
   const history = await getTranscriptionHistory();
   const updatedHistory = history.filter(
-    (historyItem) => historyItem.filePath !== item.filePath || historyItem.timestamp !== item.timestamp
+    (historyItem) => historyItem.filePath !== item.filePath || historyItem.timestamp !== item.timestamp,
   );
   await LocalStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
 }

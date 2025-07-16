@@ -1,11 +1,11 @@
-import { createClient } from "@deepgram/sdk";
+import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import { getPreferenceValues, showToast, Toast } from "@raycast/api";
 import axios from "axios";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import fs from "fs";
+import { tmpdir } from "os";
 import path from "path";
 import { promisify } from "util";
-import { tmpdir } from "os";
 
 const execPromise = promisify(exec);
 
@@ -38,7 +38,6 @@ interface Preferences {
   deepgramModel: string;
   smartFormat: boolean;
   detectLanguage: boolean;
-  diarize: boolean;
 }
 
 interface TranscriptionResult {
@@ -140,7 +139,6 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
             model: preferences.deepgramModel,
             detect_language: preferences.detectLanguage,
             smart_format: preferences.smartFormat,
-            diarize: preferences.diarize,
           });
 
           processedCount++;
@@ -155,12 +153,7 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
             return { index: i, transcription: `[Transcription Error for chunk ${i + 1}]`, rawData: null };
           }
           if (result?.results?.channels?.[0]?.alternatives?.[0]?.transcript) {
-            let transcription = result.results.channels[0].alternatives[0].transcript;
-            if (preferences.diarize && result.results.channels[0].alternatives[0].words) {
-              transcription = result.results.channels[0].alternatives[0].words
-                .map((word: any) => `[Speaker ${word.speaker}] ${word.word}`)
-                .join(" ");
-            }
+            const transcription = result.results.channels[0].alternatives[0].transcript;
             return {
               index: i,
               transcription: transcription,
@@ -216,4 +209,179 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
       .catch((e) => console.error(`Failed to delete temp directory ${tempDir}:`, e));
     console.log("Temporary directory removed.");
   }
+}
+
+export async function transcribeLive(
+  onTranscriptionUpdate: (transcription: string) => void,
+  signal: AbortSignal,
+): Promise<TranscriptionResult> {
+  if (signal.aborted) throw new AbortError();
+  const preferences = getPreferenceValues<Preferences>();
+  const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
+
+  if (!isValidApiKey) {
+    throw new Error("Invalid API key");
+  }
+
+  const ffmpegPath = await getFfmpegPath();
+  const deepgram = createClient(preferences.deepgramApiKey);
+
+  let combinedTranscription = "";
+  const rawResults: unknown[] = [];
+
+  // Set up Deepgram live stream with latest API
+  const connection = deepgram.listen.live({
+    model: preferences.deepgramModel,
+    detect_language: preferences.detectLanguage,
+    smart_format: preferences.smartFormat,
+    interim_results: true,
+    utterance_end_ms: 1000,
+  });
+
+  let connectionReady = false;
+
+  connection.on(LiveTranscriptionEvents.Open, () => {
+    console.log("Deepgram live connection opened");
+    connectionReady = true;
+  });
+
+  connection.on(LiveTranscriptionEvents.Error, (error) => {
+    console.error("Deepgram error:", error);
+    connectionReady = false;
+    showToast({ 
+      style: Toast.Style.Failure, 
+      title: "Deepgram Connection Error", 
+      message: "Failed to connect to Deepgram. Please check your API key and internet connection." 
+    });
+  });
+
+  connection.on(LiveTranscriptionEvents.Close, () => {
+    console.log("Deepgram live connection closed");
+    connectionReady = false;
+  });
+
+  connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+    if (data.channel?.alternatives?.[0]?.transcript) {
+      const update = data.channel.alternatives[0].transcript;
+      if (update.trim()) {
+        combinedTranscription += update + " ";
+        onTranscriptionUpdate(combinedTranscription.trim());
+        rawResults.push(data);
+      }
+    }
+  });
+
+  // Wait a moment for the connection to be established
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Spawn FFmpeg with improved error handling and better audio settings
+  const ffmpeg = spawn(ffmpegPath, [
+    "-f",
+    "avfoundation",
+    "-i",
+    ":0", // Use default microphone
+    "-ar",
+    "16000", // Sample rate
+    "-ac",
+    "1", // Mono channel
+    "-f",
+    "s16le", // Format
+    "-acodec",
+    "pcm_s16le",
+    "-loglevel",
+    "error", // Reduce FFmpeg verbosity
+    "pipe:1",
+  ]);
+
+  ffmpeg.stdout.on("data", (chunk) => {
+    if (connectionReady && connection.getReadyState() === 1) {
+      connection.send(chunk);
+    }
+  });
+
+  ffmpeg.stderr.on("data", (data) => {
+    const errorMessage = data.toString();
+    console.error(`FFmpeg stderr: ${errorMessage}`);
+
+    if (errorMessage.includes("permission") || errorMessage.includes("denied")) {
+      showToast({
+        style: Toast.Style.Failure,
+        title: "Microphone Access Denied",
+        message: "Please grant microphone permissions in System Settings > Privacy & Security > Microphone.",
+      });
+    } else if (errorMessage.includes("No such file") || errorMessage.includes("not found")) {
+      showToast({
+        style: Toast.Style.Failure,
+        title: "Audio Device Not Found",
+        message: "Could not access microphone. Please check your audio settings.",
+      });
+    }
+  });
+
+  ffmpeg.on("error", (error) => {
+    throw new Error(`FFmpeg error: ${error.message}`);
+  });
+
+  ffmpeg.on("close", (code) => {
+    if (code !== 0) {
+      console.error(`FFmpeg exited with code ${code}`);
+    }
+  });
+
+  // Optional: Add a maximum session timeout (10 minutes)
+  const timeoutId = setTimeout(
+    () => {
+      if (!signal.aborted) {
+        showToast({
+          style: Toast.Style.Failure,
+          title: "Session Timeout",
+          message: "Live transcription stopped after 10 minutes for safety.",
+        });
+        ffmpeg.kill();
+        connection.requestClose();
+      }
+    },
+    10 * 60 * 1000, // 10 minutes
+  );
+
+  signal.addEventListener("abort", () => {
+    clearTimeout(timeoutId);
+    ffmpeg.kill();
+    connection.requestClose();
+  });
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      ffmpeg.kill();
+      connection.requestClose();
+      resolve({
+        transcription: combinedTranscription.trim(),
+        rawData: JSON.stringify(rawResults),
+        chunkedFileInfo: { size: 0, extension: "live" },
+      });
+    };
+
+    signal.addEventListener("abort", () => {
+      cleanup();
+      reject(new AbortError());
+    });
+
+    // Handle connection close event for cleanup
+    connection.on(LiveTranscriptionEvents.Close, () => {
+      if (!signal.aborted) {
+        cleanup();
+      }
+    });
+
+    // Handle connection errors
+    connection.on(LiveTranscriptionEvents.Error, (error) => {
+      if (!signal.aborted) {
+        clearTimeout(timeoutId);
+        ffmpeg.kill();
+        connection.requestClose();
+        reject(new Error(`Deepgram connection failed: ${error.message || 'Unknown error'}`));
+      }
+    });
+  });
 }

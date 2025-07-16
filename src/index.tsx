@@ -209,21 +209,7 @@ interface TranscriptionResultProps {
 }
 
 function TranscriptionResult({ transcription, rawData, chunkedFileInfo }: TranscriptionResultProps) {
-  let displayTranscription = transcription;
-  try {
-    const raw = JSON.parse(rawData);
-    if (raw[0] && raw[0].results.channels[0].alternatives[0].words) {
-      displayTranscription = raw
-        .map((r: any) =>
-          r.results.channels[0].alternatives[0].words
-            .map((word: any) => `[Speaker ${word.speaker}] ${word.word}`)
-            .join(" "),
-        )
-        .join("\n\n");
-    }
-  } catch (e) {
-    // It's not a diarized JSON, so we just display the plain text.
-  }
+  const displayTranscription = transcription;
   let extractedData = {
     detectedLanguage: "N/A",
     languageConfidence: "N/A",

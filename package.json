@@ -16,6 +16,12 @@
       "title": "Transcribe",
       "description": "Transcribe Audio to Text Instantly",
       "mode": "view"
+    },
+    {
+      "name": "liveTranscribe",
+      "title": "Live Transcribe",
+      "description": "Transcribe live audio from your microphone in real-time",
+      "mode": "view"
     }
   ],
   "preferences": [
@@ -85,19 +91,10 @@
       "label": "Enabled",
       "required": false,
       "default": true
-    },
-    {
-      "name": "diarize",
-      "title": "Speaker Diarization",
-      "description": "Identify and label different speakers in the audio",
-      "type": "checkbox",
-      "label": "Enabled",
-      "required": false,
-      "default": false
     }
   ],
   "dependencies": {
-    "@deepgram/sdk": "^3.6.0",
+    "@deepgram/sdk": "^3.13.0",
     "@raycast/api": "^1.82.3",
     "@raycast/utils": "^1.16.3",
     "axios": "^1.7.7",
