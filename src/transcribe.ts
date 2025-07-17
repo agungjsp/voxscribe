@@ -49,6 +49,10 @@ interface TranscriptionResult {
   };
 }
 
+interface ProgressCallback {
+  (stage: string, progress: number, total: number, message: string): void;
+}
+
 class AbortError extends Error {
   constructor(message = "The operation was aborted.") {
     super(message);
@@ -71,15 +75,18 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
   }
 }
 
-export async function transcribeAudio(filePath: string, signal: AbortSignal): Promise<TranscriptionResult> {
+export async function transcribeAudio(filePath: string, signal: AbortSignal, progressCallback?: ProgressCallback): Promise<TranscriptionResult> {
   if (signal.aborted) throw new AbortError();
   const preferences = getPreferenceValues<Preferences>();
+  
+  progressCallback?.("validation", 0, 4, "Validating API key...");
   const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
 
   if (!isValidApiKey) {
     throw new Error("Invalid API key");
   }
 
+  progressCallback?.("preparation", 1, 4, "Preparing audio processing...");
   const ffmpegPath = await getFfmpegPath();
   const deepgram = createClient(preferences.deepgramApiKey);
   const tempDir = await fs.promises.mkdtemp(path.join(tmpdir(), "voxscribe-chunks-"));
@@ -89,6 +96,7 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
     let overallSize = 0;
 
     console.log(`Creating temporary directory for chunks: ${tempDir}`);
+    progressCallback?.("chunking", 2, 4, "Chunking audio file...");
     showToast({ style: Toast.Style.Animated, title: "Preparing audio..." });
 
     const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${CHUNK_DURATION_SECONDS} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
@@ -119,6 +127,7 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
     const transcriptionTasks = [];
     let processedCount = 0;
 
+    progressCallback?.("transcription", 3, 4, `Transcribing ${chunkFiles.length} audio chunks...`);
     showToast({
       style: Toast.Style.Animated,
       title: "Transcribing audio",
@@ -138,6 +147,7 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
           });
 
           processedCount++;
+          progressCallback?.("transcription", 3, 4, `Transcribed ${processedCount} of ${chunkFiles.length} chunks`);
           await showToast({
             style: Toast.Style.Animated,
             title: "Transcribing audio",
@@ -195,6 +205,7 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
       }
     }
 
+    progressCallback?.("completion", 4, 4, "Transcription completed successfully!");
     await showToast({ style: Toast.Style.Success, title: "Transcription complete!" });
 
     return {

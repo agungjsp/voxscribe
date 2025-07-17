@@ -12,7 +12,7 @@ import {
   useNavigation,
 } from "@raycast/api";
 import path from "path";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 import {
   getTranscriptionHistory,
@@ -21,6 +21,149 @@ import {
   TranscriptionHistoryItem,
 } from "./storage";
 import { transcribeAudio } from "./transcribe";
+
+interface TranscriptionProgressViewProps {
+  filePath: string;
+  onComplete: (result: { transcription: string; rawData: string; chunkedFileInfo: any }) => void;
+  onCancel: () => void;
+}
+
+function TranscriptionProgressView({ filePath, onComplete, onCancel }: TranscriptionProgressViewProps) {
+  const [stage, setStage] = useState("validation");
+  const [progress, setProgress] = useState(0);
+  const [total, setTotal] = useState(4);
+  const [message, setMessage] = useState("Starting transcription...");
+  const [isCompleted, setIsCompleted] = useState(false);
+  const abortController = useRef(new AbortController());
+
+  useEffect(() => {
+    const runTranscription = async () => {
+      try {
+        const progressCallback = (newStage: string, newProgress: number, newTotal: number, newMessage: string) => {
+          setStage(newStage);
+          setProgress(newProgress);
+          setTotal(newTotal);
+          setMessage(newMessage);
+        };
+
+        const result = await transcribeAudio(filePath, abortController.current.signal, progressCallback);
+        
+        // Save to history
+        await saveTranscription({
+          filePath,
+          transcription: result.transcription,
+          rawData: result.rawData,
+          compressedFileInfo: result.chunkedFileInfo,
+          timestamp: Date.now(),
+        });
+
+        setIsCompleted(true);
+        onComplete(result);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+        showToast({ style: Toast.Style.Failure, title: "Transcription failed", message: String(error) });
+      }
+    };
+
+    runTranscription();
+  }, [filePath, onComplete]);
+
+  const progressPercentage = total > 0 ? Math.round((progress / total) * 100) : 0;
+  
+  const getStageIcon = (currentStage: string) => {
+    switch (currentStage) {
+      case "validation":
+        return "🔑";
+      case "preparation":
+        return "⚙️";
+      case "chunking":
+        return "✂️";
+      case "transcription":
+        return "🎙️";
+      case "completion":
+        return "✅";
+      default:
+        return "⏳";
+    }
+  };
+
+  const getStageTitle = (currentStage: string) => {
+    switch (currentStage) {
+      case "validation":
+        return "Validating API Key";
+      case "preparation":
+        return "Preparing Audio Processing";
+      case "chunking":
+        return "Chunking Audio File";
+      case "transcription":
+        return "Transcribing Audio";
+      case "completion":
+        return "Transcription Complete";
+      default:
+        return "Processing...";
+    }
+  };
+
+  const stages = [
+    { key: "validation", title: "Validating API Key", icon: "🔑" },
+    { key: "preparation", title: "Preparing Audio Processing", icon: "⚙️" },
+    { key: "chunking", title: "Chunking Audio File", icon: "✂️" },
+    { key: "transcription", title: "Transcribing Audio", icon: "🎙️" },
+    { key: "completion", title: "Transcription Complete", icon: "✅" },
+  ];
+
+  const currentStageIndex = stages.findIndex(s => s.key === stage);
+
+  const markdown = `
+# ${getStageIcon(stage)} ${getStageTitle(stage)}
+
+**Progress:** ${progressPercentage}% (${progress}/${total})
+
+**Current Status:** ${message}
+
+**File:** ${path.basename(filePath)}
+
+---
+
+## Processing Stages
+
+${stages.map((s, index) => {
+  const isCompleted = index < currentStageIndex;
+  const isCurrent = index === currentStageIndex;
+  const isPending = index > currentStageIndex;
+  
+  let statusIcon = "⏳";
+  if (isCompleted) statusIcon = "✅";
+  else if (isCurrent) statusIcon = "🔄";
+  else if (isPending) statusIcon = "⏳";
+  
+  return `${statusIcon} ${s.icon} ${s.title}`;
+}).join("\n")}
+
+---
+
+*Press Escape or click Cancel to stop the transcription process.*
+  `;
+
+  const handleCancel = () => {
+    abortController.current.abort();
+    onCancel();
+  };
+
+  return (
+    <Detail
+      isLoading={!isCompleted}
+      markdown={markdown}
+      actions={
+        <ActionPanel>
+          <Action title="Cancel Transcription" onAction={handleCancel} shortcut={{ modifiers: [], key: "escape" }} />
+        </ActionPanel>
+      }
+    />
+  );
+}
 
 export default function Command() {
   const [isLoading, setIsLoading] = useState(false);
@@ -46,19 +189,6 @@ export default function Command() {
     const abortController = new AbortController();
 
     try {
-      const toast = await showToast({
-        style: Toast.Style.Animated,
-        title: "Transcription in progress...",
-        primaryAction: {
-          title: "Cancel",
-          onAction: () => {
-            abortController.abort();
-            toast.hide();
-            showToast({ style: Toast.Style.Failure, title: "Transcription cancelled" });
-          },
-        },
-      });
-
       const filePath = values.audioFile[0];
       const fileName = path.basename(filePath);
       const existingTranscription = history.find((item) => path.basename(item.filePath) === fileName);
@@ -91,17 +221,22 @@ export default function Command() {
         }
       }
 
-      const { transcription, rawData, chunkedFileInfo } = await transcribeAudio(filePath, abortController.signal);
-      await saveTranscription({
-        filePath,
-        transcription,
-        rawData,
-        compressedFileInfo: chunkedFileInfo,
-        timestamp: Date.now(),
-      });
-      await loadHistory();
-      push(<TranscriptionResult transcription={transcription} rawData={rawData} chunkedFileInfo={chunkedFileInfo} />);
-      await showToast({ style: Toast.Style.Success, title: "Transcription complete" });
+      // Show progress view
+      push(
+        <TranscriptionProgressView
+          filePath={filePath}
+          onComplete={(result) => {
+            push(<TranscriptionResult transcription={result.transcription} rawData={result.rawData} chunkedFileInfo={result.chunkedFileInfo} />);
+            loadHistory(); // Reload history after completion
+            showToast({ style: Toast.Style.Success, title: "Transcription complete" });
+          }}
+          onCancel={() => {
+            showToast({ style: Toast.Style.Failure, title: "Transcription cancelled" });
+          }}
+        />
+      );
+
+      return; // Exit early since TranscriptionProgressView will handle the rest
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return;
