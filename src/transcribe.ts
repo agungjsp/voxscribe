@@ -125,13 +125,9 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
       message: `Processing ${chunkFiles.length} chunk(s)...`,
     });
 
-    for (let i = 0; i < chunkFiles.length; i++) {
-      if (signal.aborted) throw new AbortError();
-      const chunkFileName = chunkFiles[i];
-      const chunkFilePath = path.join(tempDir, chunkFileName);
-
-      const task = async () => {
-        console.log(`Transcribing chunk ${i + 1}/${chunkFiles.length}: ${chunkFileName}`);
+    const createTranscriptionTask = (chunkFileName: string, chunkFilePath: string, index: number) => {
+      return async () => {
+        console.log(`Transcribing chunk ${index + 1}/${chunkFiles.length}: ${chunkFileName}`);
         try {
           const audioBuffer = await fs.promises.readFile(chunkFilePath);
           overallSize += audioBuffer.length;
@@ -150,26 +146,33 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal): Pr
 
           if (error) {
             console.error(`Error transcribing chunk ${chunkFileName}:`, error);
-            return { index: i, transcription: `[Transcription Error for chunk ${i + 1}]`, rawData: null };
+            return { index, transcription: `[Transcription Error for chunk ${index + 1}]`, rawData: null };
           }
           if (result?.results?.channels?.[0]?.alternatives?.[0]?.transcript) {
             const transcription = result.results.channels[0].alternatives[0].transcript;
             return {
-              index: i,
+              index,
               transcription: transcription,
               rawData: result,
             };
           } else {
             console.warn(`No transcript returned for chunk ${chunkFileName}`);
-            return { index: i, transcription: `[No transcription for chunk ${i + 1}]`, rawData: null };
+            return { index, transcription: `[No transcription for chunk ${index + 1}]`, rawData: null };
           }
         } catch (chunkError) {
           console.error(`Failed to process or transcribe chunk ${chunkFileName}:`, chunkError);
-          return { index: i, transcription: `[Processing Error for chunk ${i + 1}]`, rawData: null };
+          return { index, transcription: `[Processing Error for chunk ${index + 1}]`, rawData: null };
         }
       };
-      transcriptionTasks.push(task());
-    }
+    };
+
+    transcriptionTasks.push(
+      ...chunkFiles.map((chunkFileName, index) => {
+        if (signal.aborted) throw new AbortError();
+        const chunkFilePath = path.join(tempDir, chunkFileName);
+        return createTranscriptionTask(chunkFileName, chunkFilePath, index)();
+      })
+    );
 
     const abortPromise = new Promise((_, reject) => {
       signal.addEventListener("abort", () => {
