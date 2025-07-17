@@ -144,7 +144,7 @@ ${stages.map((s, index) => {
 
 ---
 
-*Press Escape or click Cancel to stop the transcription process.*
+*Press Cmd+. or click Cancel to stop the transcription process.*
   `;
 
   const handleCancel = () => {
@@ -158,7 +158,7 @@ ${stages.map((s, index) => {
       markdown={markdown}
       actions={
         <ActionPanel>
-          <Action title="Cancel Transcription" onAction={handleCancel} shortcut={{ modifiers: [], key: "escape" }} />
+          <Action title="Cancel Transcription" onAction={handleCancel} shortcut={{ modifiers: ["cmd"], key: "." }} />
         </ActionPanel>
       }
     />
