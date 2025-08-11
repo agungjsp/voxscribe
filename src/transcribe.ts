@@ -1,7 +1,7 @@
-import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
+import { createClient } from "@deepgram/sdk";
 import { getPreferenceValues, showToast, Toast } from "@raycast/api";
 import axios from "axios";
-import { exec, spawn } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -32,12 +32,52 @@ async function getFfmpegPath(): Promise<string> {
 
 const CHUNK_DURATION_SECONDS = 300;
 const CHUNK_FORMAT = "wav";
+const LARGE_FILE_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MB
+const DEFAULT_TARGET_CHUNK_SIZE_MB = 25;
+const MAX_CONCURRENT_TRANSCRIPTIONS = 3;
+
+async function runFfmpeg(command: string, signal: AbortSignal, retries = 1): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await execPromise(command, { signal });
+      return;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      if (attempt < retries) {
+        console.warn(`FFmpeg command failed (attempt ${attempt + 1}/${retries + 1}). Retrying...`, error);
+      } else {
+        throw new Error(
+          `FFmpeg command failed after ${retries + 1} attempts: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+}
+
+async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < tasks.length) {
+      const current = index++;
+      results[current] = await tasks[current]();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 interface Preferences {
   deepgramApiKey: string;
   deepgramModel: string;
   smartFormat: boolean;
   detectLanguage: boolean;
+  maxChunkSizeMB?: number;
 }
 
 interface TranscriptionResult {
@@ -75,10 +115,15 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
   }
 }
 
-export async function transcribeAudio(filePath: string, signal: AbortSignal, progressCallback?: ProgressCallback): Promise<TranscriptionResult> {
+export async function transcribeAudio(
+  filePath: string,
+  signal: AbortSignal,
+  progressCallback?: ProgressCallback,
+): Promise<TranscriptionResult> {
   if (signal.aborted) throw new AbortError();
   const preferences = getPreferenceValues<Preferences>();
-  
+  const targetChunkSizeBytes = (preferences.maxChunkSizeMB ?? DEFAULT_TARGET_CHUNK_SIZE_MB) * 1024 * 1024;
+
   progressCallback?.("validation", 0, 4, "Validating API key...");
   const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
 
@@ -99,20 +144,41 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal, pro
     progressCallback?.("chunking", 2, 4, "Chunking audio file...");
     showToast({ style: Toast.Style.Animated, title: "Preparing audio..." });
 
-    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${CHUNK_DURATION_SECONDS} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
+    const fileStats = await fs.promises.stat(filePath);
+    const fileSize = fileStats.size;
+    const estimatedChunks = Math.max(1, Math.ceil(fileSize / targetChunkSizeBytes));
+    progressCallback?.(
+      "preparation",
+      1,
+      4,
+      `Preparing audio (~${estimatedChunks} chunk${estimatedChunks > 1 ? "s" : ""})...`,
+    );
+
+    let chunkDuration = CHUNK_DURATION_SECONDS;
+
+    if (fileSize > LARGE_FILE_THRESHOLD_BYTES) {
+      try {
+        const { stdout } = await execPromise(
+          `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+        );
+        const duration = parseFloat(stdout.trim());
+        if (!isNaN(duration) && isFinite(duration)) {
+          const bitrate = (fileSize * 8) / duration; // bits per second
+          const sizeBasedDuration = Math.floor((targetChunkSizeBytes * 8) / bitrate);
+          if (sizeBasedDuration > 0) {
+            chunkDuration = Math.min(CHUNK_DURATION_SECONDS, sizeBasedDuration);
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to determine audio duration, using default chunk duration.", e);
+      }
+    }
+
+    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
     console.log(`Executing FFmpeg segment command: ${segmentCommand}`);
 
-    try {
-      await execPromise(segmentCommand, { signal });
-      console.log("Audio chunking and re-encoding complete.");
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        console.log("FFmpeg chunking was aborted.");
-        throw error;
-      }
-      console.error("Error during FFmpeg chunking:", error);
-      throw new Error(`FFmpeg chunking failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await runFfmpeg(segmentCommand, signal, 1);
+    console.log("Audio chunking and re-encoding complete.");
     if (signal.aborted) throw new AbortError();
 
     const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
@@ -124,10 +190,15 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal, pro
 
     let combinedTranscription = "";
     const rawResults = [];
-    const transcriptionTasks = [];
+    const transcriptionTasks: (() => Promise<{ index: number; transcription: string; rawData: unknown }>)[] = [];
     let processedCount = 0;
 
-    progressCallback?.("transcription", 3, 4, `Transcribing ${chunkFiles.length} audio chunks...`);
+    progressCallback?.(
+      "transcription",
+      3,
+      4,
+      `Transcribing ${chunkFiles.length} audio chunk${chunkFiles.length > 1 ? "s" : ""}...`,
+    );
     showToast({
       style: Toast.Style.Animated,
       title: "Transcribing audio",
@@ -180,8 +251,8 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal, pro
       ...chunkFiles.map((chunkFileName, index) => {
         if (signal.aborted) throw new AbortError();
         const chunkFilePath = path.join(tempDir, chunkFileName);
-        return createTranscriptionTask(chunkFileName, chunkFilePath, index)();
-      })
+        return () => createTranscriptionTask(chunkFileName, chunkFilePath, index);
+      }),
     );
 
     const abortPromise = new Promise((_, reject) => {
@@ -190,7 +261,10 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal, pro
       });
     });
 
-    const results = (await Promise.race([Promise.all(transcriptionTasks), abortPromise])) as {
+    const results = (await Promise.race([
+      runWithConcurrency(transcriptionTasks, MAX_CONCURRENT_TRANSCRIPTIONS),
+      abortPromise,
+    ])) as {
       index: number;
       transcription: string;
       rawData: unknown;
@@ -223,179 +297,4 @@ export async function transcribeAudio(filePath: string, signal: AbortSignal, pro
       .catch((e) => console.error(`Failed to delete temp directory ${tempDir}:`, e));
     console.log("Temporary directory removed.");
   }
-}
-
-export async function transcribeLive(
-  onTranscriptionUpdate: (transcription: string) => void,
-  signal: AbortSignal,
-): Promise<TranscriptionResult> {
-  if (signal.aborted) throw new AbortError();
-  const preferences = getPreferenceValues<Preferences>();
-  const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
-
-  if (!isValidApiKey) {
-    throw new Error("Invalid API key");
-  }
-
-  const ffmpegPath = await getFfmpegPath();
-  const deepgram = createClient(preferences.deepgramApiKey);
-
-  let combinedTranscription = "";
-  const rawResults: unknown[] = [];
-
-  // Set up Deepgram live stream with latest API
-  const connection = deepgram.listen.live({
-    model: preferences.deepgramModel,
-    detect_language: preferences.detectLanguage,
-    smart_format: preferences.smartFormat,
-    interim_results: true,
-    utterance_end_ms: 1000,
-  });
-
-  let connectionReady = false;
-
-  connection.on(LiveTranscriptionEvents.Open, () => {
-    console.log("Deepgram live connection opened");
-    connectionReady = true;
-  });
-
-  connection.on(LiveTranscriptionEvents.Error, (error) => {
-    console.error("Deepgram error:", error);
-    connectionReady = false;
-    showToast({ 
-      style: Toast.Style.Failure, 
-      title: "Deepgram Connection Error", 
-      message: "Failed to connect to Deepgram. Please check your API key and internet connection." 
-    });
-  });
-
-  connection.on(LiveTranscriptionEvents.Close, () => {
-    console.log("Deepgram live connection closed");
-    connectionReady = false;
-  });
-
-  connection.on(LiveTranscriptionEvents.Transcript, (data) => {
-    if (data.channel?.alternatives?.[0]?.transcript) {
-      const update = data.channel.alternatives[0].transcript;
-      if (update.trim()) {
-        combinedTranscription += update + " ";
-        onTranscriptionUpdate(combinedTranscription.trim());
-        rawResults.push(data);
-      }
-    }
-  });
-
-  // Wait a moment for the connection to be established
-  await new Promise(resolve => setTimeout(resolve, 1000));
-
-  // Spawn FFmpeg with improved error handling and better audio settings
-  const ffmpeg = spawn(ffmpegPath, [
-    "-f",
-    "avfoundation",
-    "-i",
-    ":0", // Use default microphone
-    "-ar",
-    "16000", // Sample rate
-    "-ac",
-    "1", // Mono channel
-    "-f",
-    "s16le", // Format
-    "-acodec",
-    "pcm_s16le",
-    "-loglevel",
-    "error", // Reduce FFmpeg verbosity
-    "pipe:1",
-  ]);
-
-  ffmpeg.stdout.on("data", (chunk) => {
-    if (connectionReady && connection.getReadyState() === 1) {
-      connection.send(chunk);
-    }
-  });
-
-  ffmpeg.stderr.on("data", (data) => {
-    const errorMessage = data.toString();
-    console.error(`FFmpeg stderr: ${errorMessage}`);
-
-    if (errorMessage.includes("permission") || errorMessage.includes("denied")) {
-      showToast({
-        style: Toast.Style.Failure,
-        title: "Microphone Access Denied",
-        message: "Please grant microphone permissions in System Settings > Privacy & Security > Microphone.",
-      });
-    } else if (errorMessage.includes("No such file") || errorMessage.includes("not found")) {
-      showToast({
-        style: Toast.Style.Failure,
-        title: "Audio Device Not Found",
-        message: "Could not access microphone. Please check your audio settings.",
-      });
-    }
-  });
-
-  ffmpeg.on("error", (error) => {
-    throw new Error(`FFmpeg error: ${error.message}`);
-  });
-
-  ffmpeg.on("close", (code) => {
-    if (code !== 0) {
-      console.error(`FFmpeg exited with code ${code}`);
-    }
-  });
-
-  // Optional: Add a maximum session timeout (10 minutes)
-  const timeoutId = setTimeout(
-    () => {
-      if (!signal.aborted) {
-        showToast({
-          style: Toast.Style.Failure,
-          title: "Session Timeout",
-          message: "Live transcription stopped after 10 minutes for safety.",
-        });
-        ffmpeg.kill();
-        connection.requestClose();
-      }
-    },
-    10 * 60 * 1000, // 10 minutes
-  );
-
-  signal.addEventListener("abort", () => {
-    clearTimeout(timeoutId);
-    ffmpeg.kill();
-    connection.requestClose();
-  });
-
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-      ffmpeg.kill();
-      connection.requestClose();
-      resolve({
-        transcription: combinedTranscription.trim(),
-        rawData: JSON.stringify(rawResults),
-        chunkedFileInfo: { size: 0, extension: "live" },
-      });
-    };
-
-    signal.addEventListener("abort", () => {
-      cleanup();
-      reject(new AbortError());
-    });
-
-    // Handle connection close event for cleanup
-    connection.on(LiveTranscriptionEvents.Close, () => {
-      if (!signal.aborted) {
-        cleanup();
-      }
-    });
-
-    // Handle connection errors
-    connection.on(LiveTranscriptionEvents.Error, (error) => {
-      if (!signal.aborted) {
-        clearTimeout(timeoutId);
-        ffmpeg.kill();
-        connection.requestClose();
-        reject(new Error(`Deepgram connection failed: ${error.message || 'Unknown error'}`));
-      }
-    });
-  });
 }
