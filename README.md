@@ -1,6 +1,6 @@
 # VoxScribe
 
-VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. It bridges the gap between audio and text, allowing you to quickly convert voice recordings, podcasts, or live speech into editable transcripts.
+VoxScribe is a powerful Raycast extension that transforms spoken words into written text with ease. It bridges the gap between audio and text, allowing you to quickly convert voice recordings or podcasts into editable transcripts.
 
 ## Features
 
@@ -8,6 +8,7 @@ VoxScribe is a powerful Raycast extension that transforms spoken words into writ
 - Automatic language detection for multilingual support.
 - Smart formatting for polished, readable transcripts.
 - Audio chunking and compression for efficient processing of large files.
+ - Reliable chunking: files over 100 MB are split into retried segments under 25 MB to avoid failures.
 - Transcription history management with easy access and removal.
 - Detailed metadata display (e.g., detected language, model info, file size).
 
@@ -38,10 +39,9 @@ Ensure FFmpeg is in your system's PATH for audio processing.
 
 ## Usage
 
-1. Open Raycast and search for "Transcribe" or "Live Transcribe".
-2. For file transcription: Select "Transcribe New Audio", choose a file, and wait for results.
-3. For live transcription: Select "Live Transcribe", start speaking, and stop when done.
-4. View results with transcription text, metadata, and copy/export options.
+1. Open Raycast and search for "Transcribe".
+2. Select "Transcribe New Audio", choose a file, and wait for results.
+3. View results with transcription text, metadata, and copy/export options.
 
 ## Transcription History
 
@@ -71,9 +71,8 @@ Encounter issues? File a GitHub issue or contact via Raycast support channels.
 
 Here are planned features to enhance VoxScribe. Priorities are based on user impact and implementation complexity. Contributions welcome!
 
-- **High Priority:**
-  - Real-Time Live Transcription: Stream audio from your microphone for instant transcription during meetings or notes. (Implemented in v2.0 prototype!)
-  - Batch Processing for Multiple Files: Transcribe entire folders or queues of audio files at once.
+  - **High Priority:**
+    - Batch Processing for Multiple Files: Transcribe entire folders or queues of audio files at once.
 
 - **Medium Priority:**
   - Advanced Export and Sharing Options: Support PDF/Markdown exports and integrations with apps like Notion or Evernote.

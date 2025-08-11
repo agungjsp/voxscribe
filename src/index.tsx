@@ -24,7 +24,7 @@ import { transcribeAudio } from "./transcribe";
 
 interface TranscriptionProgressViewProps {
   filePath: string;
-  onComplete: (result: { transcription: string; rawData: string; chunkedFileInfo: any }) => void;
+  onComplete: (result: { transcription: string; rawData: string; chunkedFileInfo: unknown }) => void;
   onCancel: () => void;
 }
 
@@ -47,7 +47,7 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
         };
 
         const result = await transcribeAudio(filePath, abortController.current.signal, progressCallback);
-        
+
         // Save to history
         await saveTranscription({
           filePath,
@@ -71,7 +71,7 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
   }, [filePath, onComplete]);
 
   const progressPercentage = total > 0 ? Math.round((progress / total) * 100) : 0;
-  
+
   const getStageIcon = (currentStage: string) => {
     switch (currentStage) {
       case "validation":
@@ -114,7 +114,7 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
     { key: "completion", title: "Transcription Complete", icon: "✅" },
   ];
 
-  const currentStageIndex = stages.findIndex(s => s.key === stage);
+  const currentStageIndex = stages.findIndex((s) => s.key === stage);
 
   const markdown = `
 # ${getStageIcon(stage)} ${getStageTitle(stage)}
@@ -129,18 +129,20 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
 
 ## Processing Stages
 
-${stages.map((s, index) => {
-  const isCompleted = index < currentStageIndex;
-  const isCurrent = index === currentStageIndex;
-  const isPending = index > currentStageIndex;
-  
-  let statusIcon = "⏳";
-  if (isCompleted) statusIcon = "✅";
-  else if (isCurrent) statusIcon = "🔄";
-  else if (isPending) statusIcon = "⏳";
-  
-  return `${statusIcon} ${s.icon} ${s.title}`;
-}).join("\n")}
+${stages
+  .map((s, index) => {
+    const isCompleted = index < currentStageIndex;
+    const isCurrent = index === currentStageIndex;
+    const isPending = index > currentStageIndex;
+
+    let statusIcon = "⏳";
+    if (isCompleted) statusIcon = "✅";
+    else if (isCurrent) statusIcon = "🔄";
+    else if (isPending) statusIcon = "⏳";
+
+    return `${statusIcon} ${s.icon} ${s.title}`;
+  })
+  .join("\n")}
 
 ---
 
@@ -186,7 +188,6 @@ export default function Command() {
     }
 
     setIsLoading(true);
-    const abortController = new AbortController();
 
     try {
       const filePath = values.audioFile[0];
@@ -226,14 +227,20 @@ export default function Command() {
         <TranscriptionProgressView
           filePath={filePath}
           onComplete={(result) => {
-            push(<TranscriptionResult transcription={result.transcription} rawData={result.rawData} chunkedFileInfo={result.chunkedFileInfo} />);
+            push(
+              <TranscriptionResult
+                transcription={result.transcription}
+                rawData={result.rawData}
+                chunkedFileInfo={result.chunkedFileInfo}
+              />,
+            );
             loadHistory(); // Reload history after completion
             showToast({ style: Toast.Style.Success, title: "Transcription complete" });
           }}
           onCancel={() => {
             showToast({ style: Toast.Style.Failure, title: "Transcription cancelled" });
           }}
-        />
+        />,
       );
 
       return; // Exit early since TranscriptionProgressView will handle the rest
