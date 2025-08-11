@@ -8,6 +8,7 @@ VoxScribe is a powerful Raycast extension that transforms spoken words into writ
 - Automatic language detection for multilingual support.
 - Smart formatting for polished, readable transcripts.
 - Audio chunking and compression for efficient processing of large files.
+ - Reliable chunking: files over 100 MB are split into retried segments under 25 MB to avoid failures.
 - Transcription history management with easy access and removal.
 - Detailed metadata display (e.g., detected language, model info, file size).
 

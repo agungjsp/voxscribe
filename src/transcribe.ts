@@ -72,6 +72,45 @@ async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number)
   return results;
 }
 
+async function segmentAudioWithRetry(
+  ffmpegPath: string,
+  filePath: string,
+  tempDir: string,
+  initialDuration: number,
+  targetChunkSizeBytes: number,
+  signal: AbortSignal,
+): Promise<string[]> {
+  let chunkDuration = initialDuration;
+  const outputPattern = path.join(tempDir, `chunk_%03d.${CHUNK_FORMAT}`);
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
+    console.log(`Executing FFmpeg segment command: ${segmentCommand}`);
+    await runFfmpeg(segmentCommand, signal, 1);
+
+    const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
+    const oversized = [];
+    for (const f of chunkFiles) {
+      const stats = await fs.promises.stat(path.join(tempDir, f));
+      if (stats.size > targetChunkSizeBytes) {
+        oversized.push(f);
+      }
+    }
+
+    if (oversized.length === 0) {
+      return chunkFiles;
+    }
+
+    console.warn(
+      `Chunks [${oversized.join(", ")}] exceed ${targetChunkSizeBytes} bytes. Reducing duration and retrying (attempt ${attempt + 2}/5).`,
+    );
+    await Promise.all(chunkFiles.map((f) => fs.promises.unlink(path.join(tempDir, f))));
+    chunkDuration = Math.max(1, Math.floor(chunkDuration / 2));
+  }
+
+  throw new Error("Unable to generate chunks within size limit");
+}
+
 interface Preferences {
   deepgramApiKey: string;
   deepgramModel: string;
@@ -137,7 +176,6 @@ export async function transcribeAudio(
   const tempDir = await fs.promises.mkdtemp(path.join(tmpdir(), "voxscribe-chunks-"));
 
   try {
-    const outputPattern = path.join(tempDir, `chunk_%03d.${CHUNK_FORMAT}`);
     let overallSize = 0;
 
     console.log(`Creating temporary directory for chunks: ${tempDir}`);
@@ -174,16 +212,17 @@ export async function transcribeAudio(
       }
     }
 
-    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
-    console.log(`Executing FFmpeg segment command: ${segmentCommand}`);
-
-    await runFfmpeg(segmentCommand, signal, 1);
-    console.log("Audio chunking and re-encoding complete.");
+    const chunkFiles = await segmentAudioWithRetry(
+      ffmpegPath,
+      filePath,
+      tempDir,
+      chunkDuration,
+      targetChunkSizeBytes,
+      signal,
+    );
     if (signal.aborted) throw new AbortError();
 
-    const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
-    console.log(`Found ${chunkFiles.length} chunks to transcribe.`);
-
+    console.log(`Audio chunking complete with ${chunkFiles.length} chunk(s).`);
     if (chunkFiles.length === 0) {
       throw new Error("No audio chunks were generated. Check the input file and FFmpeg setup.");
     }
