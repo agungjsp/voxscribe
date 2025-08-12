@@ -22,48 +22,48 @@
     {
       "name": "deepgramApiKey",
       "title": "Deepgram API Key",
-      "description": "Your Deepgram API key",
+      "description": "Your Deepgram API key from deepgram.com/console",
       "type": "password",
       "required": true
     },
     {
       "name": "deepgramModel",
-      "title": "Deepgram Model",
-      "description": "The transcription model to use",
+      "title": "Transcription Model",
+      "description": "AI model optimized for different audio types and use cases",
       "type": "dropdown",
       "required": false,
       "default": "nova-2",
       "data": [
         {
-          "title": "Nova 2 (Latest and Greatest)",
+          "title": "Nova 2 (Latest & Best Overall)",
           "value": "nova-2"
         },
         {
-          "title": "Nova 2 General",
+          "title": "Nova 2 General (Optimized for General Audio)",
           "value": "nova-2-general"
         },
         {
-          "title": "Nova 2 Meeting",
+          "title": "Nova 2 Meeting (Optimized for Meetings)",
           "value": "nova-2-meeting"
         },
         {
-          "title": "Nova 2 Phone Call",
+          "title": "Nova 2 Phone Call (Optimized for Phone Calls)",
           "value": "nova-2-phonecall"
         },
         {
-          "title": "Nova 2 Voicemail",
+          "title": "Nova 2 Voicemail (Optimized for Voicemails)",
           "value": "nova-2-voicemail"
         },
         {
-          "title": "Nova 2 Finance",
+          "title": "Nova 2 Finance (Optimized for Financial Audio)",
           "value": "nova-2-finance"
         },
         {
-          "title": "Nova 2-Medical",
+          "title": "Nova 2 Medical (Optimized for Medical Audio)",
           "value": "nova-2-medical"
         },
         {
-          "title": "Whisper Large",
+          "title": "Whisper Large (OpenAI's Model)",
           "value": "whisper-large"
         }
       ]
@@ -71,29 +71,155 @@
     {
       "name": "smartFormat",
       "title": "Smart Formatting",
-      "description": "Enable smart formatting for punctuation, etc.",
+      "description": "Automatically add punctuation, capitalization, and formatting",
       "type": "checkbox",
-      "label": "Enabled",
+      "label": "Enable smart formatting",
       "required": false,
       "default": true
     },
     {
       "name": "detectLanguage",
-      "title": "Detect Language",
-      "description": "Automatically detect the language of the audio",
+      "title": "Language Detection",
+      "description": "Automatically detect and transcribe in the spoken language",
       "type": "checkbox",
-      "label": "Enabled",
+      "label": "Enable automatic language detection",
       "required": false,
       "default": true
     },
     {
       "name": "maxChunkSizeMB",
-      "title": "Max Chunk Size (MB)",
-      "description": "Maximum size of each audio chunk in megabytes",
-      "type": "textfield",
-      "placeholder": "25",
+      "title": "Max Audio Chunk Size",
+      "description": "Maximum size per audio chunk (MB). Smaller chunks process faster but may reduce accuracy at boundaries",
+      "type": "dropdown",
       "required": false,
-      "default": "25"
+      "default": "150",
+      "data": [
+        {
+          "title": "25 MB (Fastest Processing)",
+          "value": "25"
+        },
+        {
+          "title": "50 MB (Fast Processing)",
+          "value": "50"
+        },
+        {
+          "title": "100 MB (Balanced)",
+          "value": "100"
+        },
+        {
+          "title": "150 MB (Recommended)",
+          "value": "150"
+        },
+        {
+          "title": "200 MB (Better Accuracy)",
+          "value": "200"
+        }
+      ]
+    },
+    {
+      "name": "autoOpenTranscription",
+      "title": "Auto-Open Results",
+      "description": "Automatically display transcription results when processing completes",
+      "type": "checkbox",
+      "label": "Auto-open transcription results",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "defaultCopyFormat",
+      "title": "Default Copy Action",
+      "description": "Choose what gets copied to clipboard by default",
+      "type": "dropdown",
+      "required": false,
+      "default": "transcription",
+      "data": [
+        {
+          "title": "Transcription Text Only",
+          "value": "transcription"
+        },
+        {
+          "title": "Transcription with Metadata",
+          "value": "with-metadata"
+        },
+        {
+          "title": "Raw JSON Data",
+          "value": "raw-data"
+        }
+      ]
+    },
+    {
+      "name": "enableAudioValidation",
+      "title": "Audio File Validation",
+      "description": "Validate audio files before processing to prevent errors",
+      "type": "checkbox",
+      "label": "Enable pre-processing audio validation",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "historyLimit",
+      "title": "Transcription History Limit",
+      "description": "Maximum number of transcriptions to keep in history",
+      "type": "dropdown",
+      "required": false,
+      "default": "10",
+      "data": [
+        {
+          "title": "5 Items",
+          "value": "5"
+        },
+        {
+          "title": "10 Items (Default)",
+          "value": "10"
+        },
+        {
+          "title": "25 Items",
+          "value": "25"
+        },
+        {
+          "title": "50 Items",
+          "value": "50"
+        },
+        {
+          "title": "Unlimited",
+          "value": "-1"
+        }
+      ]
+    },
+    {
+      "name": "showDetailedProgress",
+      "title": "Detailed Progress Display",
+      "description": "Show detailed progress information during transcription",
+      "type": "checkbox",
+      "label": "Show detailed processing stages and progress",
+      "required": false,
+      "default": true
+    },
+    {
+      "name": "notificationLevel",
+      "title": "Notification Level",
+      "description": "Choose when to show system notifications",
+      "type": "dropdown",
+      "required": false,
+      "default": "completion",
+      "data": [
+        {
+          "title": "None (Silent)",
+          "value": "none"
+        },
+        {
+          "title": "Errors Only",
+          "value": "errors"
+        },
+        {
+          "title": "Completion Only",
+          "value": "completion"
+        },
+        {
+          "title": "All Events",
+          "value": "all"
+        }
+      ]
     }
   ],
   "dependencies": {
@@ -101,7 +227,8 @@
     "@raycast/api": "^1.82.3",
     "@raycast/utils": "^1.16.3",
     "axios": "^1.7.7",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "file-type": "^21.0.0"
   },
   "devDependencies": {
     "@raycast/eslint-config": "^1.0.8",

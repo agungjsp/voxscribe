@@ -1,4 +1,5 @@
-import { LocalStorage } from "@raycast/api";
+import { LocalStorage, getPreferenceValues } from "@raycast/api";
+import { AudioMetadata } from "./audioUtils";
 
 export interface TranscriptionHistoryItem {
   filePath: string;
@@ -9,14 +10,29 @@ export interface TranscriptionHistoryItem {
     extension: string;
   };
   timestamp: number;
+  audioMetadata?: AudioMetadata;
+  originalFileInfo?: {
+    size: number;
+    format: string;
+    isValidAudio: boolean;
+  };
 }
 
 const HISTORY_KEY = "transcription_history";
 
 export async function saveTranscription(item: TranscriptionHistoryItem): Promise<void> {
+  const preferences = getPreferenceValues<{
+    historyLimit?: string;
+  }>();
+
+  const historyLimit = parseInt(preferences.historyLimit || "10");
+  const maxItems = historyLimit === -1 ? undefined : historyLimit;
+
   const history = await getTranscriptionHistory();
   history.unshift(item);
-  await LocalStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10))); // Keep only the last 10 items
+
+  const trimmedHistory = maxItems ? history.slice(0, maxItems) : history;
+  await LocalStorage.setItem(HISTORY_KEY, JSON.stringify(trimmedHistory));
 }
 
 export async function getTranscriptionHistory(): Promise<TranscriptionHistoryItem[]> {

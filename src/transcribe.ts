@@ -6,6 +6,7 @@ import fs from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { promisify } from "util";
+import { validateAudioFile, getDetailedAudioMetadata, AudioMetadata } from "./audioUtils";
 
 const execPromise = promisify(exec);
 
@@ -31,9 +32,9 @@ async function getFfmpegPath(): Promise<string> {
 }
 
 const CHUNK_DURATION_SECONDS = 300;
-const CHUNK_FORMAT = "wav";
+const CHUNK_FORMAT = "wav"; // Default format, but can fall back to mp3
 const LARGE_FILE_THRESHOLD_BYTES = 100 * 1024 * 1024; // 100 MB
-const DEFAULT_TARGET_CHUNK_SIZE_MB = 25;
+const DEFAULT_TARGET_CHUNK_SIZE_MB = 150; // Increased to handle larger chunks better
 const MAX_CONCURRENT_TRANSCRIPTIONS = 3;
 
 async function runFfmpeg(command: string, signal: AbortSignal, retries = 1): Promise<void> {
@@ -83,32 +84,88 @@ async function segmentAudioWithRetry(
   let chunkDuration = initialDuration;
   const outputPattern = path.join(tempDir, `chunk_%03d.${CHUNK_FORMAT}`);
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c:a pcm_s16le -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
-    console.log(`Executing FFmpeg segment command: ${segmentCommand}`);
-    await runFfmpeg(segmentCommand, signal, 1);
+  // Strategy 1: Try with original format first (more efficient)
+  console.log("🎵 Attempting to chunk audio with original format...");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c copy -reset_timestamps 1 -map 0:a -y "${outputPattern}"`;
+    console.log(`Executing FFmpeg segment command (copy codec): ${segmentCommand}`);
 
-    const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
-    const oversized = [];
-    for (const f of chunkFiles) {
-      const stats = await fs.promises.stat(path.join(tempDir, f));
-      if (stats.size > targetChunkSizeBytes) {
-        oversized.push(f);
+    try {
+      await runFfmpeg(segmentCommand, signal, 1);
+      const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(`.${CHUNK_FORMAT}`)).sort();
+
+      if (chunkFiles.length > 0) {
+        const oversized = [];
+        for (const f of chunkFiles) {
+          const stats = await fs.promises.stat(path.join(tempDir, f));
+          if (stats.size > targetChunkSizeBytes) {
+            oversized.push(f);
+          }
+        }
+
+        if (oversized.length === 0) {
+          console.log(`✅ Successfully chunked with copy codec: ${chunkFiles.length} chunks`);
+          return chunkFiles;
+        }
+
+        console.warn(`⚠️ Copy codec chunks exceed size limit. Attempt ${attempt + 1}/3`);
+        await Promise.all(chunkFiles.map((f) => fs.promises.unlink(path.join(tempDir, f))));
+        chunkDuration = Math.max(30, Math.floor(chunkDuration * 0.7)); // More conservative reduction
       }
+    } catch (error) {
+      console.warn(`Copy codec failed on attempt ${attempt + 1}:`, error);
+      await Promise.all(
+        (await fs.promises.readdir(tempDir))
+          .filter((f) => f.endsWith(`.${CHUNK_FORMAT}`))
+          .map((f) => fs.promises.unlink(path.join(tempDir, f)).catch(() => {})),
+      );
+      chunkDuration = Math.max(30, Math.floor(chunkDuration * 0.7));
     }
-
-    if (oversized.length === 0) {
-      return chunkFiles;
-    }
-
-    console.warn(
-      `Chunks [${oversized.join(", ")}] exceed ${targetChunkSizeBytes} bytes. Reducing duration and retrying (attempt ${attempt + 2}/5).`,
-    );
-    await Promise.all(chunkFiles.map((f) => fs.promises.unlink(path.join(tempDir, f))));
-    chunkDuration = Math.max(1, Math.floor(chunkDuration / 2));
   }
 
-  throw new Error("Unable to generate chunks within size limit");
+  // Strategy 2: Use compressed format (mp3) for smaller chunks
+  console.log("🎵 Falling back to compressed format...");
+  chunkDuration = Math.max(60, initialDuration); // Reset to reasonable duration
+  const mp3Pattern = path.join(tempDir, `chunk_%03d.mp3`);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const segmentCommand = `"${ffmpegPath}" -i "${filePath}" -f segment -segment_time ${chunkDuration} -c:a mp3 -b:a 128k -reset_timestamps 1 -map 0:a -y "${mp3Pattern}"`;
+    console.log(`Executing FFmpeg segment command (mp3): ${segmentCommand}`);
+
+    try {
+      await runFfmpeg(segmentCommand, signal, 1);
+      const chunkFiles = (await fs.promises.readdir(tempDir)).filter((f) => f.endsWith(".mp3")).sort();
+
+      if (chunkFiles.length > 0) {
+        const oversized = [];
+        for (const f of chunkFiles) {
+          const stats = await fs.promises.stat(path.join(tempDir, f));
+          if (stats.size > targetChunkSizeBytes) {
+            oversized.push(f);
+          }
+        }
+
+        if (oversized.length === 0) {
+          console.log(`✅ Successfully chunked with mp3 codec: ${chunkFiles.length} chunks`);
+          return chunkFiles;
+        }
+
+        console.warn(`⚠️ Mp3 chunks still exceed size limit. Attempt ${attempt + 1}/3`);
+        await Promise.all(chunkFiles.map((f) => fs.promises.unlink(path.join(tempDir, f))));
+        chunkDuration = Math.max(30, Math.floor(chunkDuration * 0.8));
+      }
+    } catch (error) {
+      console.warn(`Mp3 codec failed on attempt ${attempt + 1}:`, error);
+      await Promise.all(
+        (await fs.promises.readdir(tempDir))
+          .filter((f) => f.endsWith(".mp3"))
+          .map((f) => fs.promises.unlink(path.join(tempDir, f)).catch(() => {})),
+      );
+      chunkDuration = Math.max(30, Math.floor(chunkDuration * 0.8));
+    }
+  }
+
+  throw new Error("Unable to generate chunks within size limit after trying multiple formats");
 }
 
 interface Preferences {
@@ -117,6 +174,12 @@ interface Preferences {
   smartFormat: boolean;
   detectLanguage: boolean;
   maxChunkSizeMB?: number;
+  autoOpenTranscription?: boolean;
+  defaultCopyFormat?: string;
+  enableAudioValidation?: boolean;
+  historyLimit?: number;
+  showDetailedProgress?: boolean;
+  notificationLevel?: string;
 }
 
 interface TranscriptionResult {
@@ -125,6 +188,12 @@ interface TranscriptionResult {
   chunkedFileInfo: {
     size: number;
     extension: string;
+  };
+  audioMetadata?: AudioMetadata;
+  originalFileInfo?: {
+    size: number;
+    format: string;
+    isValidAudio: boolean;
   };
 }
 
@@ -163,14 +232,28 @@ export async function transcribeAudio(
   const preferences = getPreferenceValues<Preferences>();
   const targetChunkSizeBytes = (preferences.maxChunkSizeMB ?? DEFAULT_TARGET_CHUNK_SIZE_MB) * 1024 * 1024;
 
-  progressCallback?.("validation", 0, 4, "Validating API key...");
+  let audioValidation: { isValid: boolean; format?: { ext: string; mime: string }; error?: string } = { isValid: true };
+
+  // Validate the audio file if enabled
+  if (preferences.enableAudioValidation !== false) {
+    progressCallback?.("validation", 0, 5, "Validating audio file...");
+    audioValidation = await validateAudioFile(filePath);
+    if (!audioValidation.isValid) {
+      throw new Error(`Audio file validation failed: ${audioValidation.error}`);
+    }
+    console.log(`✅ Audio file validated: ${audioValidation.format?.ext} (${audioValidation.format?.mime})`);
+  } else {
+    progressCallback?.("validation", 0, 5, "Skipping audio validation...");
+  }
+
+  progressCallback?.("validation", 1, 5, "Validating API key...");
   const isValidApiKey = await validateApiKey(preferences.deepgramApiKey);
 
   if (!isValidApiKey) {
     throw new Error("Invalid API key");
   }
 
-  progressCallback?.("preparation", 1, 4, "Preparing audio processing...");
+  progressCallback?.("preparation", 2, 5, "Preparing audio processing...");
   const ffmpegPath = await getFfmpegPath();
   const deepgram = createClient(preferences.deepgramApiKey);
   const tempDir = await fs.promises.mkdtemp(path.join(tmpdir(), "voxscribe-chunks-"));
@@ -179,16 +262,20 @@ export async function transcribeAudio(
     let overallSize = 0;
 
     console.log(`Creating temporary directory for chunks: ${tempDir}`);
-    progressCallback?.("chunking", 2, 4, "Chunking audio file...");
-    showToast({ style: Toast.Style.Animated, title: "Preparing audio..." });
+    progressCallback?.("chunking", 3, 5, "Chunking audio file...");
+
+    // Show toast notifications based on preference
+    if (preferences.notificationLevel === "all" || preferences.notificationLevel === undefined) {
+      showToast({ style: Toast.Style.Animated, title: "Preparing audio..." });
+    }
 
     const fileStats = await fs.promises.stat(filePath);
     const fileSize = fileStats.size;
     const estimatedChunks = Math.max(1, Math.ceil(fileSize / targetChunkSizeBytes));
     progressCallback?.(
       "preparation",
-      1,
-      4,
+      2,
+      5,
       `Preparing audio (~${estimatedChunks} chunk${estimatedChunks > 1 ? "s" : ""})...`,
     );
 
@@ -234,15 +321,17 @@ export async function transcribeAudio(
 
     progressCallback?.(
       "transcription",
-      3,
       4,
+      5,
       `Transcribing ${chunkFiles.length} audio chunk${chunkFiles.length > 1 ? "s" : ""}...`,
     );
-    showToast({
-      style: Toast.Style.Animated,
-      title: "Transcribing audio",
-      message: `Processing ${chunkFiles.length} chunk(s)...`,
-    });
+    if (preferences.notificationLevel === "all" || preferences.notificationLevel === undefined) {
+      showToast({
+        style: Toast.Style.Animated,
+        title: "Transcribing audio",
+        message: `Processing ${chunkFiles.length} chunk(s)...`,
+      });
+    }
 
     const createTranscriptionTask = (chunkFileName: string, chunkFilePath: string, index: number) => {
       return async () => {
@@ -257,12 +346,15 @@ export async function transcribeAudio(
           });
 
           processedCount++;
-          progressCallback?.("transcription", 3, 4, `Transcribed ${processedCount} of ${chunkFiles.length} chunks`);
-          await showToast({
-            style: Toast.Style.Animated,
-            title: "Transcribing audio",
-            message: `Processed ${processedCount} of ${chunkFiles.length} chunks`,
-          });
+          progressCallback?.("transcription", 4, 5, `Transcribed ${processedCount} of ${chunkFiles.length} chunks`);
+
+          if (preferences.notificationLevel === "all" || preferences.notificationLevel === undefined) {
+            await showToast({
+              style: Toast.Style.Animated,
+              title: "Transcribing audio",
+              message: `Processed ${processedCount} of ${chunkFiles.length} chunks`,
+            });
+          }
 
           if (error) {
             console.error(`Error transcribing chunk ${chunkFileName}:`, error);
@@ -270,13 +362,21 @@ export async function transcribeAudio(
           }
           if (result?.results?.channels?.[0]?.alternatives?.[0]?.transcript) {
             const transcription = result.results.channels[0].alternatives[0].transcript;
+            console.log(`✅ Chunk ${index + 1} transcription successful:`, {
+              transcriptLength: transcription.length,
+              hasRawData: !!result,
+              resultStructure: result ? Object.keys(result) : "null",
+            });
             return {
               index,
               transcription: transcription,
               rawData: result,
             };
           } else {
-            console.warn(`No transcript returned for chunk ${chunkFileName}`);
+            console.warn(`❌ No transcript returned for chunk ${chunkFileName}:`, {
+              hasResult: !!result,
+              resultStructure: result ? Object.keys(result) : "null",
+            });
             return { index, transcription: `[No transcription for chunk ${index + 1}]`, rawData: null };
           }
         } catch (chunkError) {
@@ -290,7 +390,7 @@ export async function transcribeAudio(
       ...chunkFiles.map((chunkFileName, index) => {
         if (signal.aborted) throw new AbortError();
         const chunkFilePath = path.join(tempDir, chunkFileName);
-        return () => createTranscriptionTask(chunkFileName, chunkFilePath, index);
+        return createTranscriptionTask(chunkFileName, chunkFilePath, index);
       }),
     );
 
@@ -309,27 +409,82 @@ export async function transcribeAudio(
       rawData: unknown;
     }[];
 
+    // Ensure all transcription tasks have completed before cleanup
+    if (results && results.length === transcriptionTasks.length) {
+      console.log("All transcription tasks completed successfully");
+    }
+
     results.sort((a, b) => a.index - b.index);
 
+    console.log(`🔍 Processing ${results.length} transcription results:`);
     for (const result of results) {
+      console.log(`📝 Result ${result.index}:`, {
+        hasTranscription: !!result.transcription,
+        transcriptionLength: result.transcription?.length || 0,
+        hasRawData: !!result.rawData,
+        transcriptionPreview: result.transcription?.substring(0, 50) || "None",
+      });
+
       combinedTranscription += result.transcription + " ";
       if (result.rawData) {
+        console.log(`✅ Adding rawData for chunk ${result.index}`);
         rawResults.push(result.rawData);
+      } else {
+        console.log(`❌ No rawData for chunk ${result.index}`);
       }
     }
 
-    progressCallback?.("completion", 4, 4, "Transcription completed successfully!");
-    await showToast({ style: Toast.Style.Success, title: "Transcription complete!" });
+    console.log(`📊 Final rawResults summary:`, {
+      totalResults: results.length,
+      rawDataCount: rawResults.length,
+      rawResultsIsArray: Array.isArray(rawResults),
+      combinedTranscriptionLength: combinedTranscription.length,
+    });
+
+    progressCallback?.("completion", 5, 5, "Transcription completed successfully!");
+
+    // Show completion notification based on preference
+    if (preferences.notificationLevel !== "none" && preferences.notificationLevel !== "errors") {
+      await showToast({ style: Toast.Style.Success, title: "Transcription complete!" });
+    }
+
+    // Get detailed audio metadata
+    const audioMetadata = await getDetailedAudioMetadata(filePath);
+
+    // Serialize rawResults with error handling
+    let serializedRawData: string;
+    try {
+      serializedRawData = JSON.stringify(rawResults);
+      console.log(`✅ JSON serialization successful:`, {
+        rawResultsLength: rawResults.length,
+        serializedLength: serializedRawData.length,
+        firstChar: serializedRawData[0],
+        lastChar: serializedRawData[serializedRawData.length - 1],
+      });
+    } catch (serializationError) {
+      console.error(`❌ JSON serialization failed:`, serializationError);
+      console.log(`Fallback: using empty array for rawData`);
+      serializedRawData = "[]";
+    }
 
     return {
       transcription: combinedTranscription.trim(),
-      rawData: JSON.stringify(rawResults),
+      rawData: serializedRawData,
       chunkedFileInfo: {
         size: overallSize,
         extension: CHUNK_FORMAT,
       },
+      audioMetadata: audioMetadata || undefined,
+      originalFileInfo: {
+        size: fileSize,
+        format: audioValidation.format?.ext || "unknown",
+        isValidAudio: audioValidation.isValid,
+      },
     };
   } finally {
+    // Add a small delay to ensure all async file operations are complete
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
     console.log(`Attempting to remove temporary directory: ${tempDir}`);
     await fs.promises
       .rm(tempDir, { recursive: true, force: true })
