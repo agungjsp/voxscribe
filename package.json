@@ -32,38 +32,26 @@
       "description": "AI model optimized for different audio types and use cases",
       "type": "dropdown",
       "required": false,
-      "default": "nova-2",
+      "default": "nova-3",
       "data": [
         {
-          "title": "Nova 2 (Latest & Best Overall)",
+          "title": "Nova 3 (Latest & Best)",
+          "value": "nova-3"
+        },
+        {
+          "title": "Nova 3 General",
+          "value": "nova-3-general"
+        },
+        {
+          "title": "Nova 3 Medical",
+          "value": "nova-3-medical"
+        },
+        {
+          "title": "Nova 2",
           "value": "nova-2"
         },
         {
-          "title": "Nova 2 General (Optimized for General Audio)",
-          "value": "nova-2-general"
-        },
-        {
-          "title": "Nova 2 Meeting (Optimized for Meetings)",
-          "value": "nova-2-meeting"
-        },
-        {
-          "title": "Nova 2 Phone Call (Optimized for Phone Calls)",
-          "value": "nova-2-phonecall"
-        },
-        {
-          "title": "Nova 2 Voicemail (Optimized for Voicemails)",
-          "value": "nova-2-voicemail"
-        },
-        {
-          "title": "Nova 2 Finance (Optimized for Financial Audio)",
-          "value": "nova-2-finance"
-        },
-        {
-          "title": "Nova 2 Medical (Optimized for Medical Audio)",
-          "value": "nova-2-medical"
-        },
-        {
-          "title": "Whisper Large (OpenAI's Model)",
+          "title": "Whisper Large",
           "value": "whisper-large"
         }
       ]
@@ -86,36 +74,7 @@
       "required": false,
       "default": true
     },
-    {
-      "name": "maxChunkSizeMB",
-      "title": "Max Audio Chunk Size",
-      "description": "Maximum size per audio chunk (MB). Smaller chunks process faster but may reduce accuracy at boundaries",
-      "type": "dropdown",
-      "required": false,
-      "default": "150",
-      "data": [
-        {
-          "title": "25 MB (Fastest Processing)",
-          "value": "25"
-        },
-        {
-          "title": "50 MB (Fast Processing)",
-          "value": "50"
-        },
-        {
-          "title": "100 MB (Balanced)",
-          "value": "100"
-        },
-        {
-          "title": "150 MB (Recommended)",
-          "value": "150"
-        },
-        {
-          "title": "200 MB (Better Accuracy)",
-          "value": "200"
-        }
-      ]
-    },
+    
     {
       "name": "autoOpenTranscription",
       "title": "Auto-Open Results",
@@ -187,47 +146,19 @@
       ]
     },
     {
-      "name": "showDetailedProgress",
-      "title": "Detailed Progress Display",
-      "description": "Show detailed progress information during transcription",
+      "name": "showNotifications",
+      "title": "Show Notifications",
+      "description": "Show system notifications for transcription events",
       "type": "checkbox",
-      "label": "Show detailed processing stages and progress",
+      "label": "Enable notifications",
       "required": false,
       "default": true
-    },
-    {
-      "name": "notificationLevel",
-      "title": "Notification Level",
-      "description": "Choose when to show system notifications",
-      "type": "dropdown",
-      "required": false,
-      "default": "completion",
-      "data": [
-        {
-          "title": "None (Silent)",
-          "value": "none"
-        },
-        {
-          "title": "Errors Only",
-          "value": "errors"
-        },
-        {
-          "title": "Completion Only",
-          "value": "completion"
-        },
-        {
-          "title": "All Events",
-          "value": "all"
-        }
-      ]
     }
   ],
   "dependencies": {
-    "@deepgram/sdk": "^3.13.0",
-    "@raycast/api": "^1.82.3",
-    "@raycast/utils": "^1.16.3",
-    "axios": "^1.7.7",
-    "dotenv": "^16.4.5",
+    "@deepgram/sdk": "^4.11.2",
+    "@raycast/api": "^1.103.7",
+    "@raycast/utils": "^2.2.2",
     "file-type": "^21.0.0"
   },
   "devDependencies": {
