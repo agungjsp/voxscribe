@@ -1,6 +1,7 @@
 import { fileTypeFromFile } from "file-type";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { getSafeFfprobePath } from "./binaryUtils";
 
 const execPromise = promisify(exec);
 
@@ -43,13 +44,13 @@ export const SUPPORTED_AUDIO_FORMATS: SupportedAudioFormat[] = [
   },
   {
     extension: "aac",
-    mimeTypes: ["audio/aac", "audio/x-aac"],
+    mimeTypes: ["audio/aac", "audio/x-aac", "audio/aacp"],
     description: "Advanced Audio Codec",
     isLossless: false,
   },
   {
     extension: "ogg",
-    mimeTypes: ["audio/ogg", "application/ogg"],
+    mimeTypes: ["audio/ogg", "application/ogg", "audio/vorbis"],
     description: "Ogg Vorbis",
     isLossless: false,
   },
@@ -61,13 +62,13 @@ export const SUPPORTED_AUDIO_FORMATS: SupportedAudioFormat[] = [
   },
   {
     extension: "m4a",
-    mimeTypes: ["audio/m4a", "audio/mp4"],
+    mimeTypes: ["audio/m4a", "audio/mp4", "audio/x-m4a", "video/mp4", "audio/aac"],
     description: "MPEG-4 Audio",
     isLossless: false,
   },
   {
     extension: "wma",
-    mimeTypes: ["audio/x-ms-wma"],
+    mimeTypes: ["audio/x-ms-wma", "audio/wma"],
     description: "Windows Media Audio",
     isLossless: false,
   },
@@ -76,6 +77,36 @@ export const SUPPORTED_AUDIO_FORMATS: SupportedAudioFormat[] = [
     mimeTypes: ["audio/aiff", "audio/x-aiff"],
     description: "Audio Interchange File Format",
     isLossless: true,
+  },
+  {
+    extension: "webm",
+    mimeTypes: ["audio/webm", "video/webm"],
+    description: "WebM Audio",
+    isLossless: false,
+  },
+  {
+    extension: "mp4",
+    mimeTypes: ["video/mp4", "audio/mp4"],
+    description: "MPEG-4 Video/Audio",
+    isLossless: false,
+  },
+  {
+    extension: "mkv",
+    mimeTypes: ["video/x-matroska", "audio/x-matroska"],
+    description: "Matroska",
+    isLossless: false,
+  },
+  {
+    extension: "mov",
+    mimeTypes: ["video/quicktime"],
+    description: "QuickTime",
+    isLossless: false,
+  },
+  {
+    extension: "avi",
+    mimeTypes: ["video/x-msvideo", "video/avi"],
+    description: "AVI",
+    isLossless: false,
   },
 ];
 
@@ -104,30 +135,10 @@ export function getAudioFormatInfo(extension: string): SupportedAudioFormat | nu
   return SUPPORTED_AUDIO_FORMATS.find((format) => format.extension === extension.toLowerCase()) || null;
 }
 
-async function checkFfprobeAvailable(): Promise<string | null> {
-  try {
-    // Check if ffprobe is in the PATH
-    await execPromise("ffprobe -version");
-    return "ffprobe";
-  } catch (error) {
-    // Check common Homebrew paths
-    const commonPaths = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"];
-    for (const path of commonPaths) {
-      try {
-        await execPromise(`${path} -version`);
-        return path;
-      } catch (e) {
-        // Continue to the next path
-      }
-    }
-    return null;
-  }
-}
-
 export async function getDetailedAudioMetadata(filePath: string): Promise<AudioMetadata | null> {
   try {
     // Check if ffprobe is available
-    const ffprobePath = await checkFfprobeAvailable();
+    const ffprobePath = await getSafeFfprobePath();
     if (!ffprobePath) {
       console.warn("ffprobe not found, skipping detailed audio metadata extraction");
       return null;
@@ -219,8 +230,10 @@ export async function validateAudioFile(filePath: string): Promise<{
   error?: string;
 }> {
   try {
-    // First check if file exists and is readable
     const fs = await import("fs");
+    const pathModule = await import("path");
+
+    // Check if file exists
     if (!fs.existsSync(filePath)) {
       return { isValid: false, error: "File does not exist" };
     }
@@ -230,16 +243,29 @@ export async function validateAudioFile(filePath: string): Promise<{
       return { isValid: false, error: "File is empty" };
     }
 
-    // Detect file format
+    // Try to detect format via file-type library
     const format = await detectAudioFormat(filePath);
+
+    // If file-type doesn't recognize it, try ffprobe as fallback
     if (!format) {
+      const metadata = await getDetailedAudioMetadata(filePath);
+      if (metadata && metadata.duration > 0) {
+        // ffprobe could read it, so it's valid - use extension as format
+        const ext = pathModule.extname(filePath).slice(1).toLowerCase();
+        return {
+          isValid: true,
+          format: { ext: ext || "unknown", mime: "audio/unknown" },
+        };
+      }
       return { isValid: false, error: "Unsupported audio format" };
     }
 
-    // Verify it's actually an audio file by trying to get metadata
+    // Verify it's actually playable by checking metadata
     const metadata = await getDetailedAudioMetadata(filePath);
     if (!metadata) {
-      return { isValid: false, error: "Invalid audio file or corrupted" };
+      // If ffprobe fails but file-type detected audio, still allow it
+      // FFmpeg will handle conversion during chunking
+      return { isValid: true, format };
     }
 
     return { isValid: true, format };

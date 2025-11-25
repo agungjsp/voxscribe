@@ -23,14 +23,17 @@ import {
   TranscriptionHistoryItem,
 } from "./storage";
 import { transcribeAudio } from "./transcribe";
-import { formatDuration, formatBitrate, formatSampleRate, formatFileSize, AudioMetadata } from "./audioUtils";
+import { formatDuration, formatFileSize, AudioMetadata } from "./audioUtils";
 
 interface TranscriptionProgressViewProps {
   filePath: string;
   onComplete: (result: {
     transcription: string;
     rawData: string;
-    chunkedFileInfo: unknown;
+    chunkedFileInfo: {
+      size: number;
+      extension: string;
+    };
     audioMetadata?: AudioMetadata;
     originalFileInfo?: {
       size: number;
@@ -45,23 +48,16 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
   const [stage, setStage] = useState("validation");
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(4);
-  const [message, setMessage] = useState("Starting transcription...");
+  const [message, setMessage] = useState("Starting...");
   const [isCompleted, setIsCompleted] = useState(false);
   const abortController = useRef(new AbortController());
   const isRunning = useRef(false);
-
-  const preferences = getPreferenceValues<{
-    showDetailedProgress?: boolean;
-  }>();
 
   const memoizedOnComplete = useCallback(onComplete, []);
 
   useEffect(() => {
     const runTranscription = async () => {
-      if (isRunning.current) {
-        console.log("Transcription already running, skipping duplicate");
-        return;
-      }
+      if (isRunning.current) return;
       isRunning.current = true;
 
       try {
@@ -74,7 +70,6 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
 
         const result = await transcribeAudio(filePath, abortController.current.signal, progressCallback);
 
-        // Save to history
         await saveTranscription({
           filePath,
           transcription: result.transcription,
@@ -102,7 +97,7 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
 
   const progressPercentage = total > 0 ? Math.round((progress / total) * 100) : 0;
 
-  const getStageIcon = (currentStage: string) => {
+  const getStageEmoji = (currentStage: string) => {
     switch (currentStage) {
       case "validation":
         return "🔍";
@@ -112,86 +107,24 @@ function TranscriptionProgressView({ filePath, onComplete, onCancel }: Transcrip
         return "✂️";
       case "transcription":
         return "🎙️";
-      case "completion":
-        return "✅";
       default:
         return "⏳";
     }
   };
 
-  const getStageTitle = (currentStage: string) => {
-    switch (currentStage) {
-      case "validation":
-        return "Validating Files & Settings";
-      case "preparation":
-        return "Preparing Audio Processing";
-      case "chunking":
-        return "Chunking Audio File";
-      case "transcription":
-        return "Transcribing Audio";
-      case "completion":
-        return "Transcription Complete";
-      default:
-        return "Processing...";
-    }
-  };
+  const markdown = `
+# ${getStageEmoji(stage)} Transcribing Audio
 
-  const stages = [
-    { key: "validation", title: "Validating Files & Settings", icon: "🔍" },
-    { key: "preparation", title: "Preparing Audio Processing", icon: "⚙️" },
-    { key: "chunking", title: "Chunking Audio File", icon: "✂️" },
-    { key: "transcription", title: "Transcribing Audio", icon: "🎙️" },
-    { key: "completion", title: "Transcription Complete", icon: "✅" },
-  ];
+**Progress:** ${progressPercentage}%
 
-  const currentStageIndex = stages.findIndex((s) => s.key === stage);
+**Status:** ${message}
 
-  const basicMarkdown = `
-# ${getStageIcon(stage)} ${getStageTitle(stage)}
-
-**Progress:** ${progressPercentage}% (${progress}/${total})
-
-**File:** ${path.basename(filePath)}
+**File:** \`${path.basename(filePath)}\`
 
 ---
 
-*Press Cmd+. or click Cancel to stop the transcription process.*
+Press **Cmd + .** to cancel
   `;
-
-  const detailedMarkdown = `
-# ${getStageIcon(stage)} ${getStageTitle(stage)}
-
-**Progress:** ${progressPercentage}% (${progress}/${total})
-
-**Current Status:** ${message}
-
-**File:** ${path.basename(filePath)}
-
----
-
-## Processing Stages
-
-${stages
-  .map((s, index) => {
-    const isCompleted = index < currentStageIndex;
-    const isCurrent = index === currentStageIndex;
-    const isPending = index > currentStageIndex;
-
-    let statusIcon = "⏳";
-    if (isCompleted) statusIcon = "✅";
-    else if (isCurrent) statusIcon = "🔄";
-    else if (isPending) statusIcon = "⏳";
-
-    return `${statusIcon} ${s.icon} ${s.title}`;
-  })
-  .join("\n")}
-
----
-
-*Press Cmd+. or click Cancel to stop the transcription process.*
-  `;
-
-  const markdown = preferences.showDetailedProgress !== false ? detailedMarkdown : basicMarkdown;
 
   const handleCancel = () => {
     abortController.current.abort();
@@ -204,7 +137,12 @@ ${stages
       markdown={markdown}
       actions={
         <ActionPanel>
-          <Action title="Cancel Transcription" onAction={handleCancel} shortcut={{ modifiers: ["cmd"], key: "." }} />
+          <Action
+            title="Cancel"
+            icon={Icon.XMarkCircle}
+            onAction={handleCancel}
+            shortcut={{ modifiers: ["cmd"], key: "." }}
+          />
         </ActionPanel>
       }
     />
@@ -244,14 +182,14 @@ export default function Command() {
 
       if (existingTranscription) {
         const shouldReTranscribe = await confirmAlert({
-          title: "File already transcribed",
-          message: "A file with the same name has already been transcribed. Do you want to re-transcribe it?",
+          title: "File Already Transcribed",
+          message: "Do you want to re-transcribe this file?",
           primaryAction: {
             title: "Re-transcribe",
             style: Alert.ActionStyle.Default,
           },
           dismissAction: {
-            title: "Use existing",
+            title: "Use Existing",
             style: Alert.ActionStyle.Cancel,
           },
         });
@@ -268,13 +206,11 @@ export default function Command() {
               />,
             );
           }
-          await showToast({ style: Toast.Style.Success, title: "Loaded existing transcription" });
           setIsLoading(false);
           return;
         }
       }
 
-      // Show progress view
       push(
         <TranscriptionProgressView
           filePath={filePath}
@@ -290,78 +226,35 @@ export default function Command() {
                 />,
               );
             }
-            loadHistory(); // Reload history after completion
+            loadHistory();
             showToast({ style: Toast.Style.Success, title: "Transcription complete" });
           }}
           onCancel={() => {
-            showToast({ style: Toast.Style.Failure, title: "Transcription cancelled" });
+            showToast({ style: Toast.Style.Failure, title: "Cancelled" });
           }}
         />,
       );
-
-      return; // Exit early since TranscriptionProgressView will handle the rest
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
       if (error instanceof Error && error.message.includes("FFmpeg not found")) {
-        const markdown = `
-# FFmpeg Not Found
+        push(
+          <Detail
+            markdown={`
+# FFmpeg Required
 
-It seems that FFmpeg is not installed or not available in your system's PATH. 
 VoxScribe requires FFmpeg to process audio files.
 
----
-
-### Installation Guide
-
-You can install FFmpeg using [Homebrew](https://brew.sh) (recommended for macOS):
+## Installation
 
 \`\`\`bash
 brew install ffmpeg
 \`\`\`
 
-If you have installed FFmpeg but are still seeing this error, please ensure that its location is included in your system's \`$PATH\` environment variable.
-        `;
-        push(<Detail markdown={markdown} />);
-      } else {
-        const preferences = getPreferenceValues<{
-          notificationLevel?: string;
-        }>();
-
-        // Show error notifications unless set to "none"
-        if (preferences.notificationLevel !== "none") {
-          await showToast({ style: Toast.Style.Failure, title: "Transcription failed", message: String(error) });
-        }
-
-        // Show error detail with option to open preferences
-        const errorMarkdown = `
-# Transcription Failed
-
-**Error:** ${String(error)}
-
----
-
-This could be due to:
-- Invalid API key
-- Unsupported audio format
-- Network connectivity issues
-- Audio file corruption
-
-Try checking your extension preferences or contact support if the issue persists.
-        `;
-
-        push(
-          <Detail
-            markdown={errorMarkdown}
-            actions={
-              <ActionPanel>
-                <Action title="Open Extension Preferences" onAction={openExtensionPreferences} icon={Icon.Gear} />
-                <Action.CopyToClipboard title="Copy Error Details" content={String(error)} icon={Icon.Clipboard} />
-              </ActionPanel>
-            }
+After installing, restart Raycast and try again.
+            `}
           />,
         );
+      } else {
+        await showToast({ style: Toast.Style.Failure, title: "Error", message: String(error) });
       }
     } finally {
       setIsLoading(false);
@@ -372,83 +265,156 @@ Try checking your extension preferences or contact support if the issue persists
     try {
       await removeTranscriptionItem(item);
       await loadHistory();
-      await showToast({ style: Toast.Style.Success, title: "Item removed from history" });
+      await showToast({ style: Toast.Style.Success, title: "Removed" });
     } catch (error) {
-      await showToast({ style: Toast.Style.Failure, title: "Failed to remove item", message: String(error) });
+      await showToast({ style: Toast.Style.Failure, title: "Failed to remove", message: String(error) });
+    }
+  }
+
+  async function handleClearHistory() {
+    const confirmed = await confirmAlert({
+      title: "Clear History",
+      message: "Are you sure you want to clear all transcription history?",
+      primaryAction: {
+        title: "Clear",
+        style: Alert.ActionStyle.Destructive,
+      },
+    });
+
+    if (confirmed) {
+      const { clearTranscriptionHistory } = await import("./storage");
+      await clearTranscriptionHistory();
+      await loadHistory();
+      await showToast({ style: Toast.Style.Success, title: "History cleared" });
     }
   }
 
   return (
-    <List isLoading={isLoading}>
-      <List.Item
-        title="Transcribe New Audio"
-        actions={
-          <ActionPanel>
-            <Action.Push
-              title="Transcribe New Audio"
-              target={
-                <Form
-                  actions={
-                    <ActionPanel>
-                      <Action.SubmitForm title="Transcribe" onSubmit={handleSubmit} />
+    <List isLoading={isLoading} searchBarPlaceholder="Search transcription history...">
+      <List.Section title="Actions">
+        <List.Item
+          icon={Icon.Plus}
+          title="New Transcription"
+          subtitle="Select an audio file to transcribe"
+          actions={
+            <ActionPanel>
+              <Action.Push
+                title="New Transcription"
+                icon={Icon.Plus}
+                shortcut={{ modifiers: ["cmd"], key: "n" }}
+                target={
+                  <Form
+                    actions={
+                      <ActionPanel>
+                        <Action.SubmitForm title="Transcribe" icon={Icon.MicrophoneFilled} onSubmit={handleSubmit} />
+                        <Action title="Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
+                      </ActionPanel>
+                    }
+                  >
+                    <Form.FilePicker
+                      id="audioFile"
+                      title="Audio File"
+                      allowMultipleSelection={false}
+                      canChooseDirectories={false}
+                      allowedFileTypes={[
+                        "mp3",
+                        "wav",
+                        "flac",
+                        "aac",
+                        "ogg",
+                        "opus",
+                        "m4a",
+                        "wma",
+                        "aiff",
+                        "webm",
+                        "mp4",
+                        "mkv",
+                        "avi",
+                        "mov",
+                      ]}
+                    />
+                  </Form>
+                }
+              />
+              <Action title="Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
+            </ActionPanel>
+          }
+        />
+      </List.Section>
+
+      {history.length > 0 ? (
+        <List.Section title="History" subtitle={`${history.length} item${history.length !== 1 ? "s" : ""}`}>
+          {history.map((item, index) => (
+            <List.Item
+              key={`${item.filePath}-${item.timestamp}`}
+              icon={Icon.Document}
+              title={path.basename(item.filePath)}
+              subtitle={item.audioMetadata ? formatDuration(item.audioMetadata.duration) : undefined}
+              accessories={[
+                {
+                  text: new Date(item.timestamp).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }),
+                },
+              ]}
+              actions={
+                <ActionPanel>
+                  <ActionPanel.Section>
+                    <Action.Push
+                      title="View"
+                      icon={Icon.Eye}
+                      target={
+                        <TranscriptionResult
+                          transcription={item.transcription}
+                          rawData={item.rawData}
+                          chunkedFileInfo={item.compressedFileInfo}
+                          audioMetadata={item.audioMetadata}
+                          originalFileInfo={item.originalFileInfo}
+                        />
+                      }
+                    />
+                    <Action.CopyToClipboard
+                      title="Copy Transcription"
+                      content={item.transcription}
+                      shortcut={{ modifiers: ["cmd"], key: "c" }}
+                    />
+                  </ActionPanel.Section>
+                  <ActionPanel.Section>
+                    <Action
+                      title="Remove"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      onAction={() => handleRemoveItem(item)}
+                      shortcut={{ modifiers: ["cmd"], key: "backspace" }}
+                    />
+                    {index === 0 && history.length > 1 && (
                       <Action
-                        title="Extension Preferences"
-                        onAction={openExtensionPreferences}
-                        icon={Icon.Gear}
-                        shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+                        title="Clear All History"
+                        icon={Icon.Trash}
+                        style={Action.Style.Destructive}
+                        onAction={handleClearHistory}
+                        shortcut={{ modifiers: ["cmd", "shift"], key: "backspace" }}
                       />
-                    </ActionPanel>
-                  }
-                >
-                  <Form.FilePicker id="audioFile" title="Audio File" allowMultipleSelection={false} />
-                </Form>
+                    )}
+                  </ActionPanel.Section>
+                  <ActionPanel.Section>
+                    <Action title="Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
+                  </ActionPanel.Section>
+                </ActionPanel>
               }
             />
-            <Action
-              title="Extension Preferences"
-              onAction={openExtensionPreferences}
-              icon={Icon.Gear}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-            />
-          </ActionPanel>
-        }
-      />
-      <List.Section title="Transcription History">
-        {history.map((item, index) => (
-          <List.Item
-            key={index}
-            title={path.basename(item.filePath)}
-            subtitle={new Date(item.timestamp).toLocaleString()}
-            actions={
-              <ActionPanel>
-                <Action.Push
-                  title="View Transcription"
-                  target={
-                    <TranscriptionResult
-                      transcription={item.transcription}
-                      rawData={item.rawData}
-                      chunkedFileInfo={item.compressedFileInfo}
-                      audioMetadata={item.audioMetadata}
-                      originalFileInfo={item.originalFileInfo}
-                    />
-                  }
-                />
-                <Action
-                  title="Remove from History"
-                  onAction={() => handleRemoveItem(item)}
-                  shortcut={{ modifiers: ["cmd"], key: "backspace" }}
-                />
-                <Action
-                  title="Extension Preferences"
-                  onAction={openExtensionPreferences}
-                  icon={Icon.Gear}
-                  shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-                />
-              </ActionPanel>
-            }
-          />
-        ))}
-      </List.Section>
+          ))}
+        </List.Section>
+      ) : (
+        <List.EmptyView
+          icon={Icon.MicrophoneFilled}
+          title="No Transcriptions Yet"
+          description="Press Enter to transcribe your first audio file"
+        />
+      )}
     </List>
   );
 }
@@ -479,165 +445,91 @@ function TranscriptionResult({
     defaultCopyFormat?: string;
   }>();
 
-  const displayTranscription = transcription;
-  let extractedData = {
-    detectedLanguage: "N/A",
-    languageConfidence: "N/A",
-    topics: null,
-    modelName: "N/A",
-    modelVersion: "N/A",
-    modelArch: "N/A",
+  const extractedData = {
+    detectedLanguage: "N/A" as string,
+    languageConfidence: "N/A" as string,
+    modelName: "N/A" as string,
   };
-
-  console.log(`🔍 Processing rawData for metadata extraction:`, {
-    rawDataType: typeof rawData,
-    rawDataLength: rawData?.length || 0,
-    rawDataPreview: rawData?.substring(0, 100) || "null",
-  });
 
   try {
     const parsedArray = JSON.parse(rawData);
-    console.log(`✅ JSON parse successful:`, {
-      parsedType: typeof parsedArray,
-      isArray: Array.isArray(parsedArray),
-      arrayLength: Array.isArray(parsedArray) ? parsedArray.length : "N/A",
-      firstElementExists: Array.isArray(parsedArray) && parsedArray.length > 0 ? !!parsedArray[0] : false,
-    });
-
     if (Array.isArray(parsedArray) && parsedArray.length > 0) {
-      // Find the first non-null result (in case some chunks failed)
-      const firstValidResult = parsedArray.find((result) => result !== null && result !== undefined);
-
-      console.log(`🔎 Searching for valid result:`, {
-        totalElements: parsedArray.length,
-        nullCount: parsedArray.filter((r) => r === null || r === undefined).length,
-        firstValidFound: !!firstValidResult,
-        firstValidStructure: firstValidResult ? Object.keys(firstValidResult) : "null",
-      });
-
-      if (firstValidResult) {
-        const channel = firstValidResult?.results?.channels?.[0];
-        const metadata = firstValidResult?.metadata;
-        const modelInfo = metadata?.model_info;
+      const firstResult = parsedArray.find((r) => r !== null);
+      if (firstResult) {
+        const channel = firstResult?.results?.channels?.[0];
+        const metadata = firstResult?.metadata;
         const modelKey = metadata?.models?.[0];
+        const modelInfo = metadata?.model_info;
 
-        console.log(`📊 Extracting metadata:`, {
-          hasResults: !!firstValidResult.results,
-          hasChannels: !!firstValidResult.results?.channels,
-          channelCount: firstValidResult.results?.channels?.length || 0,
-          hasMetadata: !!metadata,
-          hasModelInfo: !!modelInfo,
-          modelKey: modelKey || "none",
-        });
-
-        extractedData = {
-          detectedLanguage: channel?.detected_language ?? "N/A",
-          languageConfidence: String(channel?.language_confidence ?? "N/A"),
-          topics: channel?.topics ?? null,
-          modelName: (modelKey && modelInfo?.[modelKey]?.name) ?? "N/A",
-          modelVersion: (modelKey && modelInfo?.[modelKey]?.version) ?? "N/A",
-          modelArch: (modelKey && modelInfo?.[modelKey]?.arch) ?? "N/A",
-        };
-
-        console.log(`✅ Metadata extracted successfully:`, extractedData);
-      } else {
-        console.warn("❌ Raw data array contains no valid results. Cannot extract metadata.");
+        extractedData.detectedLanguage = channel?.detected_language ?? "N/A";
+        const confidence = channel?.language_confidence;
+        extractedData.languageConfidence = confidence ? `${(confidence * 100).toFixed(1)}%` : "N/A";
+        extractedData.modelName = (modelKey && modelInfo?.[modelKey]?.name) ?? "N/A";
       }
-    } else {
-      console.warn("❌ Raw data is not an array or is empty. Cannot extract metadata.");
     }
-  } catch (error) {
-    console.error("❌ Failed to parse or process rawData for metadata:", error);
-    console.log("Raw data that failed to parse:", rawData);
+  } catch {
+    // Ignore parse errors
   }
 
-  const markdown = `
-## Transcription
-
-${displayTranscription}
-  `;
+  const markdown = `## Transcription\n\n${transcription || "*No transcription available*"}`;
 
   const getCopyContent = (format: string) => {
-    switch (format) {
-      case "with-metadata":
-        return `${displayTranscription}
-
----
-**Audio Properties:**
-- Format: ${audioMetadata?.format || "Unknown"}
-- Duration: ${audioMetadata ? formatDuration(audioMetadata.duration) : "Unknown"}
-- Quality: ${audioMetadata?.isLossless ? "Lossless" : "Lossy"}
-- Model: ${extractedData.modelName}
-- Language: ${extractedData.detectedLanguage}`;
-      case "raw-data":
-        return rawData;
-      default:
-        return displayTranscription;
+    if (format === "with-metadata") {
+      return `${transcription}\n\n---\nLanguage: ${extractedData.detectedLanguage}\nModel: ${extractedData.modelName}\nDuration: ${audioMetadata ? formatDuration(audioMetadata.duration) : "Unknown"}`;
     }
+    if (format === "raw-data") {
+      return rawData;
+    }
+    return transcription;
   };
 
-  const defaultCopyFormat = preferences.defaultCopyFormat || "transcription";
-  const primaryCopyContent = getCopyContent(defaultCopyFormat);
+  const defaultFormat = preferences.defaultCopyFormat || "transcription";
 
   return (
     <Detail
       markdown={markdown}
       actions={
         <ActionPanel>
-          <Action.CopyToClipboard
-            title={defaultCopyFormat === "transcription" ? "Copy Transcription (default)" : "Copy Transcription"}
-            content={primaryCopyContent}
-            icon={Icon.Clipboard}
-          />
-          {defaultCopyFormat !== "transcription" && (
-            <Action.CopyToClipboard title="Copy Transcription Only" content={displayTranscription} icon={Icon.Text} />
-          )}
-          {defaultCopyFormat !== "with-metadata" && (
+          <ActionPanel.Section>
             <Action.CopyToClipboard
-              title="Copy with Metadata"
-              content={getCopyContent("with-metadata")}
-              icon={Icon.Document}
-              shortcut={{ modifiers: ["cmd"], key: "m" }}
+              title="Copy Transcription"
+              content={getCopyContent(defaultFormat)}
+              icon={Icon.Clipboard}
             />
-          )}
-          {defaultCopyFormat !== "raw-data" && (
+            {defaultFormat !== "transcription" && (
+              <Action.CopyToClipboard title="Copy Text Only" content={transcription} icon={Icon.Text} />
+            )}
+            {defaultFormat !== "with-metadata" && (
+              <Action.CopyToClipboard
+                title="Copy with Metadata"
+                content={getCopyContent("with-metadata")}
+                icon={Icon.Document}
+                shortcut={{ modifiers: ["cmd"], key: "m" }}
+              />
+            )}
             <Action.CopyToClipboard
-              title="Copy Raw JSON Data"
+              title="Copy Raw JSON"
               content={rawData}
               icon={Icon.Code}
               shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
             />
-          )}
-          <Action
-            title="Open Extension Preferences"
-            onAction={openExtensionPreferences}
-            icon={Icon.Gear}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-          />
+          </ActionPanel.Section>
+          <ActionPanel.Section>
+            <Action title="Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
+          </ActionPanel.Section>
         </ActionPanel>
       }
       metadata={
         <Detail.Metadata>
-          <Detail.Metadata.Label title="Transcription Info" />
-          <Detail.Metadata.Label title="Detected Language" text={extractedData.detectedLanguage} />
-          <Detail.Metadata.Label title="Language Confidence" text={String(extractedData.languageConfidence)} />
-          <Detail.Metadata.Separator />
-
-          <Detail.Metadata.Label title="AI Model Details" />
-          <Detail.Metadata.Label title="Model Name" text={extractedData.modelName} />
-          <Detail.Metadata.Label title="Model Version" text={extractedData.modelVersion} />
-          <Detail.Metadata.Label title="Model Architecture" text={extractedData.modelArch} />
+          <Detail.Metadata.Label title="Language" text={extractedData.detectedLanguage} />
+          <Detail.Metadata.Label title="Confidence" text={extractedData.languageConfidence} />
+          <Detail.Metadata.Label title="Model" text={extractedData.modelName} />
           <Detail.Metadata.Separator />
 
           {audioMetadata && (
             <>
-              <Detail.Metadata.Label title="Audio Properties" />
-              <Detail.Metadata.Label title="Format" text={audioMetadata.format} />
-              <Detail.Metadata.Label title="Codec" text={audioMetadata.codec} />
               <Detail.Metadata.Label title="Duration" text={formatDuration(audioMetadata.duration)} />
-              <Detail.Metadata.Label title="Sample Rate" text={formatSampleRate(audioMetadata.sampleRate)} />
-              <Detail.Metadata.Label title="Bitrate" text={formatBitrate(audioMetadata.bitrate)} />
-              <Detail.Metadata.Label title="Channels" text={String(audioMetadata.channels)} />
+              <Detail.Metadata.Label title="Format" text={audioMetadata.format} />
               <Detail.Metadata.TagList title="Quality">
                 <Detail.Metadata.TagList.Item
                   text={audioMetadata.isLossless ? "Lossless" : "Lossy"}
@@ -648,15 +540,8 @@ ${displayTranscription}
             </>
           )}
 
-          <Detail.Metadata.Label title="File Information" />
-          {originalFileInfo && (
-            <>
-              <Detail.Metadata.Label title="Original File Size" text={formatFileSize(originalFileInfo.size)} />
-              <Detail.Metadata.Label title="File Format" text={originalFileInfo.format.toUpperCase()} />
-            </>
-          )}
-          <Detail.Metadata.Label title="Processing Output Size" text={formatFileSize(chunkedFileInfo.size)} />
-          <Detail.Metadata.Label title="Processing Format" text={chunkedFileInfo.extension.toUpperCase()} />
+          {originalFileInfo && <Detail.Metadata.Label title="File Size" text={formatFileSize(originalFileInfo.size)} />}
+          <Detail.Metadata.Label title="Processed Size" text={formatFileSize(chunkedFileInfo.size)} />
         </Detail.Metadata>
       }
     />
